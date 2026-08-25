@@ -1,0 +1,6 @@
+/output/
+/cache/
+/dist/
+*.tar
+*.zip
+
