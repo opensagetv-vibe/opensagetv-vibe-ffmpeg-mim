@@ -1,6 +1,6 @@
 /output/
 /cache/
 /dist/
+/code/tools/__pycache__/
 *.tar
 *.zip
-

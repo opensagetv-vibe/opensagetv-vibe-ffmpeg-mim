@@ -1,0 +1,339 @@
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+OUT="$ROOT/output/linux-x64"
+MIM="$OUT/ffmpeg_MIM"
+
+mkdir -p "$OUT"
+CXX_BIN="${CXX:-g++}"
+"$CXX_BIN" -std=c++17 -O2 -pipe -pthread -static -s \
+  "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp" -o "$MIM"
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+cp "$MIM" "$TMP/ffmpeg"
+cat > "$TMP/ffmpeg.real" <<'SH'
+#!/usr/bin/env bash
+if [[ " $* " == *" -encoders "* ]]; then
+  cat <<'EOT'
+ V....D h264_qsv
+ V....D hevc_qsv
+ V....D h264_nvenc
+ V....D hevc_nvenc
+ V..... libx264
+ V..... libx265
+EOT
+  exit 0
+fi
+printf 'FAKE_FFMPEG_ARGS:'
+printf ' <%s>' "$@"
+printf '\n'
+while IFS= read -r line; do printf 'FAKE_STDIN:<%s>\n' "$line"; done
+SH
+chmod +x "$TMP/ffmpeg.real"
+cat > "$TMP/ffprobe" <<'SH'
+#!/usr/bin/env bash
+echo 'stream|index=0|codec_name=h264|codec_type=video|width=1920|height=1080|avg_frame_rate=30000/1001'
+echo 'stream|index=1|codec_name=ac3|codec_type=audio'
+echo 'format|format_name=mpegts'
+SH
+chmod +x "$TMP/ffprobe"
+cp "$ROOT/ffmpeg.real.ini" "$TMP/ffmpeg.real.ini"
+# Force deterministic HW backend; explicit backend trusts the compiled encoder list.
+sed -i 's/^backend=auto$/backend=qsv/' "$TMP/ffmpeg.real.ini"
+mkdir -p "$TMP/media"
+printf '\x47' > "$TMP/media/test.ts"
+
+v="$($TMP/ffmpeg --mim-version)"
+[[ "$v" == *"SageTV FFmpeg MIM 0.4.4"* ]]
+
+# Management command must be untouched.
+d="$($TMP/ffmpeg --mim-dry-run -version)"
+[[ "$d" == *"ffmpeg.real -version"* ]]
+[[ "$d" != *"probesize"* ]]
+
+# SageTV-specific -dumpmetadata must be translated for modern FFmpeg rather
+# than passed through as an unknown option.  SageTV intentionally requests
+# -v 2, so MIM forces info logging to expose Input/Duration/Stream lines.
+d="$($TMP/ffmpeg --mim-dry-run -dumpmetadata -v 2 -i "$TMP/media/test.ts")"
+[[ "$d" == *"backend=metadata"* ]]
+[[ "$d" != *"-dumpmetadata"* ]]
+[[ "$d" == *"-loglevel info"* ]]
+[[ "$d" == *"-i $TMP/media/test.ts"* ]]
+[[ -f "$TMP/ffmpeg.real.log" ]]
+grep -q 'mim-start version=0.4.4' "$TMP/ffmpeg.real.log"
+
+# A normal non-SageTV encode command remains transparent even if it uses a mapped codec.
+d="$($TMP/ffmpeg --mim-dry-run -i "$TMP/media/test.ts" -c:v libx264 -f null -)"
+[[ "$d" == *"backend=passthrough"* ]]
+[[ "$d" == *"-c:v libx264"* ]]
+[[ "$d" != *"h264_qsv"* ]]
+
+# Growing live inputs use the reliable software encoder while keeping SageTV bitrate.
+d="$($TMP/ffmpeg --mim-dry-run -stdinctrl -activefile -vsync 0 -async 1 -i "$TMP/media/test.ts" -vcodec mpeg4 -b 4000k -g 300 -bf 2 -rc_init_cplx 197 -minrate 0 -mbd 2 -muxrate 8000000 -f mpegts -)"
+[[ "$d" == *"backend=software"* ]]
+[[ "$d" == *"-sagetvratectrl"* ]]
+[[ "$d" == *"-follow 1"* ]]
+[[ "$d" != *"-activefile"* ]]
+[[ "$d" != *"-stdinctrl"* ]]
+[[ "$d" == *"-c:v libx264"* ]]
+[[ "$d" != *"-vsync"* ]]
+[[ "$d" != *"-async"* ]]
+[[ "$d" != *"-rc_init_cplx"* ]]
+[[ "$d" != *"-minrate"* ]]
+[[ "$d" != *"-mbd"* ]]
+[[ "$d" != *"-muxrate"* ]]
+[[ "$d" == *"-b:v 4000k"* ]]
+# A software live encode must not initialize a QSV device.
+[[ "$d" != *"-init_hw_device"* ]]
+[[ "$d" != *"-hwaccel qsv"* ]]
+[[ "$d" == *"-bf 0"* ]]
+[[ "$d" == *"-g 60"* ]]
+[[ "$d" == *"-flush_packets 1"* ]]
+[[ "$d" == *"-mpegts_flags +initial_discontinuity"* ]]
+[[ "$d" == *"-a53cc 1"* ]]
+[[ "$d" == *"-maxrate 6M"* ]]
+[[ "$d" == *"-bufsize 12M"* ]]
+
+
+# Regression from live MiniPlayer fixed-push failure: SageTV explicitly requested
+# Matroska + MP2 mono.  Hardware mapping may replace only the video encoder; it
+# must not silently change the wire contract to MPEG-TS + copied AC3.
+d="$($TMP/ffmpeg --mim-dry-run -v 3 -y -threads 2 -sn -vsync 0 -async 1 -stdinctrl -i "$TMP/media/test.ts" -threads 5 -f matroska -vcodec mpeg4 -b 1000000 -r 29.97 -s 720x480 -g 300 -bf 0 -acodec mp2 -ab 112000 -ar 48000 -ac 1 -packetsize 1024 -aspect 16:9 -muxrate 2000000 -rc_init_cplx 197 -maxrate 1000000 -minrate 0 -bufsize 1000000 -mbd 2 -)"
+[[ "$d" == *"backend=qsv"* ]]
+[[ "$d" == *"-c:v h264_qsv"* ]]
+[[ "$d" == *"-f matroska"* ]]
+[[ "$d" == *"-acodec mp2"* ]]
+[[ "$d" == *"-ab 112000"* ]]
+[[ "$d" == *"-ar 48000"* ]]
+[[ "$d" == *"-ac 1"* ]]
+[[ "$d" != *"-c:a copy"* ]]
+[[ "$d" != *"-mpegts_flags"* ]]
+[[ "$d" != *"-muxpreload"* ]]
+[[ "$d" != *"-muxdelay"* ]]
+
+# Native H.264 software request maps to H.264 hardware.
+d="$($TMP/ffmpeg --mim-dry-run -stdinctrl -i "$TMP/media/test.ts" -c:v libx264 -b:v 2M -f mpegts -)"
+[[ "$d" == *"backend=qsv"* ]]
+[[ "$d" == *"-c:v h264_qsv"* ]]
+
+# Native HEVC software request maps to HEVC hardware, not H.264.
+d="$($TMP/ffmpeg --mim-dry-run -stdinctrl -i "$TMP/media/test.ts" -c:v libx265 -b:v 2M -f mpegts -)"
+[[ "$d" == *"backend=qsv"* ]]
+[[ "$d" == *"-c:v hevc_qsv"* ]]
+
+# Local stv:// must map to a local file path.
+d="$($TMP/ffmpeg --mim-dry-run -stdinctrl -i stv://localhost//tmp/example.ts -vcodec mpeg4 -b 1M -f mpegts -)"
+[[ "$d" == *"-i /tmp/example.ts"* ]]
+[[ "$d" == *"-c:v h264_qsv"* ]]
+
+# Recognized SageTV media job with no software-transcode trigger defaults to full stream copy.
+d="$($TMP/ffmpeg --mim-dry-run -stdinctrl -i "$TMP/media/test.ts" -c:v copy -c:a copy -f mpegts -)"
+[[ "$d" == *"backend=copy"* ]]
+[[ "$d" == *"-c:v copy"* ]]
+[[ "$d" == *"-c:a copy"* ]]
+[[ "$d" != *"-sagetvratectrl"* ]]
+[[ "$d" != *"-probesize"* ]]
+
+# Even if SageTV supplied old encode tuning without a mapped video encoder request,
+# copy policy strips encode/filter-only options rather than accidentally transcoding.
+d="$($TMP/ffmpeg --mim-dry-run -stdinctrl -i "$TMP/media/test.ts" -b:v 3M -g 250 -bf 2 -vf scale=1280:720 -f mpegts -)"
+[[ "$d" == *"backend=copy"* ]]
+[[ "$d" == *"-c:v copy"* ]]
+[[ "$d" == *"-c:a copy"* ]]
+[[ "$d" != *"-b:v 3M"* ]]
+[[ "$d" != *"-g 250"* ]]
+[[ "$d" != *"-bf 2"* ]]
+[[ "$d" != *"-vf"* ]]
+
+# Full QSV decode is opt-in. When enabled it adds the validated oneVPL/QSV
+# device + hwaccel chain and restores the old wrapper's QSV deinterlace/scale filter.
+cp "$ROOT/ffmpeg.real.ini" "$TMP/ffmpeg.hwdecode.ini"
+sed -i 's/^backend=auto$/backend=qsv/' "$TMP/ffmpeg.hwdecode.ini"
+sed -i 's/^hardware_decode=false$/hardware_decode=true/' "$TMP/ffmpeg.hwdecode.ini"
+d="$(SAGETV_FFMPEG_MIM_INI="$TMP/ffmpeg.hwdecode.ini" "$TMP/ffmpeg" --mim-dry-run -stdinctrl -i "$TMP/media/test.ts" -vcodec mpeg4 -s 1280x720 -b 4M -f mpegts -)"
+[[ "$d" == *"-init_hw_device qsv:hw,child_device=/dev/dri/renderD128"* ]]
+[[ "$d" == *"-hwaccel qsv"* ]]
+[[ "$d" == *"-hwaccel_device hw"* ]]
+[[ "$d" == *"-hwaccel_output_format qsv"* ]]
+[[ "$d" == *"-vf deinterlace_qsv,scale_qsv=w=1280:h=720"* ]]
+[[ "$d" != *"-s 1280x720"* ]]
+
+# Verify live SageTV control handling on an actual transcode:
+# videorateadapt is forwarded; inactivefile terminates stock-follow child.
+cat > "$TMP/ffmpeg.real" <<'SH'
+#!/usr/bin/env bash
+if [[ " $* " == *" -encoders "* ]]; then echo ' V....D h264_qsv'; exit 0; fi
+trap 'echo CHILD_TERM; exit 0' TERM
+while IFS= read -r line; do echo "CHILD_STDIN:$line"; done
+SH
+chmod +x "$TMP/ffmpeg.real"
+rm -rf "$TMP/cache"
+ctrl="$({ printf 'videorateadapt -500\n'; sleep .1; printf 'inactivefile\n'; } | "$TMP/ffmpeg" -stdinctrl -activefile -i "$TMP/media/test.ts" -vcodec mpeg4 -b 4M -f mpegts - 2>&1)"
+[[ "$ctrl" == *"CHILD_STDIN:videorateadapt -500"* ]]
+[[ "$ctrl" == *"CHILD_TERM"* ]]
+
+# v0.4.4 retains v0.4.3 crash containment: STOP must target the isolated FFmpeg process group,
+# including helper descendants, without terminating the MIM/SageTV parent.
+cat > "$TMP/ffmpeg.real" <<'SH'
+#!/usr/bin/env bash
+if [[ " $* " == *" -encoders "* ]]; then echo ' V....D h264_qsv'; exit 0; fi
+trap 'touch "$MIM_TEST_DIR/direct.term"; exit 0' TERM
+(
+  trap 'touch "$MIM_TEST_DIR/descendant.term"; exit 0' TERM
+  while :; do sleep 1; done
+) &
+while IFS= read -r line; do :; done
+SH
+chmod +x "$TMP/ffmpeg.real"
+rm -f "$TMP/direct.term" "$TMP/descendant.term"
+set +e
+{ sleep .4; printf 'STOP\n'; } | MIM_TEST_DIR="$TMP" timeout 6 "$TMP/ffmpeg" -stdinctrl -i "$TMP/media/test.ts" -vcodec mpeg4 -b 4M -f mpegts - >/dev/null 2>&1
+iso_rc=$?
+set -e
+[[ "$iso_rc" -eq 0 ]]
+for _ in {1..30}; do
+  [[ -f "$TMP/direct.term" && -f "$TMP/descendant.term" ]] && break
+  sleep .05
+done
+[[ -f "$TMP/direct.term" ]]
+[[ -f "$TMP/descendant.term" ]]
+grep -q 'safety: ffmpeg child isolated' "$TMP/ffmpeg.real.log"
+grep -q 'ffmpeg process-group pgid=' "$TMP/ffmpeg.real.log"
+
+
+# v0.4.4 MiniPlayer full-switch teardown: SageTV may close the MIM stdin
+# without first writing STOP/QUIT. EOF must terminate the isolated FFmpeg
+# process group, including descendants, so no old QSV transcode survives into
+# the next MiniPlayer initialization.
+cat > "$TMP/ffmpeg.real" <<'SH'
+#!/usr/bin/env bash
+if [[ " $* " == *" -encoders "* ]]; then echo ' V....D h264_qsv'; exit 0; fi
+trap 'touch "$MIM_TEST_DIR/eof.direct.term"; exit 0' TERM
+(
+  trap 'touch "$MIM_TEST_DIR/eof.descendant.term"; exit 0' TERM
+  while :; do sleep 1; done
+) &
+touch "$MIM_TEST_DIR/eof.ready"
+while IFS= read -r line; do :; done
+SH
+chmod +x "$TMP/ffmpeg.real"
+rm -f "$TMP/eof.direct.term" "$TMP/eof.descendant.term" "$TMP/eof.ready"
+set +e
+{ sleep .5; } | MIM_TEST_DIR="$TMP" timeout 6 "$TMP/ffmpeg" -stdinctrl -i "$TMP/media/test.ts" -vcodec mpeg4 -b 4M -f mpegts - >/dev/null 2>&1
+eof_rc=$?
+set -e
+[[ "$eof_rc" -eq 0 ]]
+for _ in {1..40}; do
+  [[ -f "$TMP/eof.direct.term" && -f "$TMP/eof.descendant.term" ]] && break
+  sleep .05
+done
+[[ -f "$TMP/eof.direct.term" ]]
+[[ -f "$TMP/eof.descendant.term" ]]
+grep -Eq 'control: stdin (EOF|HUP) -> terminate ffmpeg process-group' "$TMP/ffmpeg.real.log"
+
+# SageTV/Java Process.destroy() is allowed to terminate the MIM itself. The MIM
+# must catch SIGTERM, tear down/reap the isolated FFmpeg process group, and only
+# then exit; FFmpeg and descendants must not be orphaned across a file switch.
+cat > "$TMP/ffmpeg.real" <<'SH'
+#!/usr/bin/env bash
+if [[ " $* " == *" -encoders "* ]]; then echo ' V....D h264_qsv'; exit 0; fi
+trap 'touch "$MIM_TEST_DIR/sig.direct.term"; exit 0' TERM
+(
+  trap 'touch "$MIM_TEST_DIR/sig.descendant.term"; exit 0' TERM
+  while :; do sleep 1; done
+) &
+touch "$MIM_TEST_DIR/sig.ready"
+while IFS= read -r line; do :; done
+SH
+chmod +x "$TMP/ffmpeg.real"
+rm -f "$TMP/sig.direct.term" "$TMP/sig.descendant.term" "$TMP/sig.ready"
+rm -f "$TMP/control.fifo"
+mkfifo "$TMP/control.fifo"
+exec 9<>"$TMP/control.fifo"
+MIM_TEST_DIR="$TMP" "$TMP/ffmpeg" -stdinctrl -i "$TMP/media/test.ts" -vcodec mpeg4 -b 4M -f mpegts - <"$TMP/control.fifo" >/dev/null 2>&1 &
+mim_pid=$!
+for _ in {1..60}; do [[ -f "$TMP/sig.ready" ]] && break; sleep .05; done
+[[ -f "$TMP/sig.ready" ]]
+kill -TERM "$mim_pid"
+set +e
+wait "$mim_pid"
+sig_rc=$?
+set -e
+exec 9>&-
+[[ "$sig_rc" -eq 0 ]]
+for _ in {1..40}; do
+  [[ -f "$TMP/sig.direct.term" && -f "$TMP/sig.descendant.term" ]] && break
+  sleep .05
+done
+[[ -f "$TMP/sig.direct.term" ]]
+[[ -f "$TMP/sig.descendant.term" ]]
+grep -q 'control: parent signal=15 -> terminate ffmpeg process-group' "$TMP/ffmpeg.real.log"
+
+# Last-resort Linux parent-death protection: if the MIM itself is SIGKILLed and
+# cannot run cleanup code, PR_SET_PDEATHSIG(SIGKILL) guarantees the direct
+# ffmpeg.real process cannot survive indefinitely.
+cat > "$TMP/ffmpeg.real" <<'SH'
+#!/usr/bin/env bash
+if [[ " $* " == *" -encoders "* ]]; then echo ' V....D h264_qsv'; exit 0; fi
+echo $$ > "$MIM_TEST_DIR/pdeath.pid"
+touch "$MIM_TEST_DIR/pdeath.ready"
+while IFS= read -r line; do :; done
+SH
+chmod +x "$TMP/ffmpeg.real"
+rm -f "$TMP/pdeath.pid" "$TMP/pdeath.ready"
+rm -f "$TMP/control2.fifo"
+mkfifo "$TMP/control2.fifo"
+exec 8<>"$TMP/control2.fifo"
+MIM_TEST_DIR="$TMP" "$TMP/ffmpeg" -stdinctrl -i "$TMP/media/test.ts" -vcodec mpeg4 -b 4M -f mpegts - <"$TMP/control2.fifo" >/dev/null 2>&1 &
+mim_pid=$!
+for _ in {1..60}; do [[ -f "$TMP/pdeath.ready" && -f "$TMP/pdeath.pid" ]] && break; sleep .05; done
+[[ -f "$TMP/pdeath.pid" ]]
+ff_pid="$(cat "$TMP/pdeath.pid")"
+kill -0 "$ff_pid" 2>/dev/null
+kill -KILL "$mim_pid"
+set +e
+wait "$mim_pid" 2>/dev/null
+pdeath_rc=$?
+set -e
+exec 8>&-
+[[ "$pdeath_rc" -eq 137 ]]
+for _ in {1..60}; do
+  if ! kill -0 "$ff_pid" 2>/dev/null; then break; fi
+  sleep .05
+done
+! kill -0 "$ff_pid" 2>/dev/null
+grep -q 'safety: parent-death SIGKILL configured for ffmpeg child' "$TMP/ffmpeg.real.log"
+
+# An abnormal realtime FFmpeg exit is contained as clean EOF/no-video instead
+# of returning a failed transcoder process status to SageTV.
+cat > "$TMP/ffmpeg.real" <<'SH'
+#!/usr/bin/env bash
+if [[ " $* " == *" -encoders "* ]]; then echo ' V....D h264_qsv'; exit 0; fi
+exit 42
+SH
+chmod +x "$TMP/ffmpeg.real"
+set +e
+"$TMP/ffmpeg" -stdinctrl -i "$TMP/media/test.ts" -vcodec mpeg4 -b 4M -f mpegts - >/dev/null 2>&1
+fail_rc=$?
+set -e
+[[ "$fail_rc" -eq 0 ]]
+grep -q 'contained ffmpeg failure rc=42 -> MIM exit rc=0' "$TMP/ffmpeg.real.log"
+
+# Closing FFmpeg stdin before a forwarded runtime-control command must not kill
+# the MIM with SIGPIPE. The broken control pipe is logged and contained.
+cat > "$TMP/ffmpeg.real" <<'SH'
+#!/usr/bin/env bash
+if [[ " $* " == *" -encoders "* ]]; then echo ' V....D h264_qsv'; exit 0; fi
+exec 0<&-
+sleep 1
+exit 0
+SH
+chmod +x "$TMP/ffmpeg.real"
+set +e
+{ sleep .1; printf 'videorateadapt -500\n'; } | "$TMP/ffmpeg" -stdinctrl -i "$TMP/media/test.ts" -vcodec mpeg4 -b 4M -f mpegts - >/dev/null 2>&1
+pipe_rc=$?
+set -e
+[[ "$pipe_rc" -eq 0 ]]
+grep -q 'containing EPIPE' "$TMP/ffmpeg.real.log"
+
+echo "[PASS] MIM mapping + MiniPlayer switch teardown + crash-containment tests"
