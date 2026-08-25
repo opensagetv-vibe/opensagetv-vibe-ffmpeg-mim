@@ -40,6 +40,10 @@ chmod +x "$TMP/ffprobe"
 cp "$ROOT/ffmpeg.real.ini" "$TMP/ffmpeg.real.ini"
 # Force deterministic HW backend; explicit backend trusts the compiled encoder list.
 sed -i 's/^backend=auto$/backend=qsv/' "$TMP/ffmpeg.real.ini"
+# Control/teardown tests use a one-byte synthetic TS with no video headers.
+# The active-video readiness gate has its own integration coverage and would
+# intentionally delay launching the fake child used by these unit tests.
+sed -i 's/^video_ready_gate=true$/video_ready_gate=false/' "$TMP/ffmpeg.real.ini"
 mkdir -p "$TMP/media"
 printf '\x47' > "$TMP/media/test.ts"
 
@@ -164,11 +168,26 @@ cat > "$TMP/ffmpeg.real" <<'SH'
 #!/usr/bin/env bash
 if [[ " $* " == *" -encoders "* ]]; then echo ' V....D h264_qsv'; exit 0; fi
 trap 'echo CHILD_TERM; exit 0' TERM
-while IFS= read -r line; do echo "CHILD_STDIN:$line"; done
+touch "$MIM_TEST_DIR/control.ready"
+while IFS= read -r line; do
+  echo "CHILD_STDIN:$line"
+  [[ "$line" == "videorateadapt -500" ]] && touch "$MIM_TEST_DIR/control.received"
+done
 SH
 chmod +x "$TMP/ffmpeg.real"
 rm -rf "$TMP/cache"
-ctrl="$({ printf 'videorateadapt -500\n'; sleep .1; printf 'inactivefile\n'; } | "$TMP/ffmpeg" -stdinctrl -activefile -i "$TMP/media/test.ts" -vcodec mpeg4 -b 4M -f mpegts - 2>&1)"
+rm -f "$TMP/control.ready" "$TMP/control.received"
+ctrl="$({
+  for _ in {1..100}; do [[ -f "$TMP/control.ready" ]] && break; sleep .01; done
+  printf 'videorateadapt -500\n'
+  for _ in {1..100}; do [[ -f "$TMP/control.received" ]] && break; sleep .01; done
+  if [[ ! -f "$TMP/control.received" ]]; then
+    echo "ERROR: fake FFmpeg did not receive videorateadapt" >&2
+    [[ -f "$TMP/ffmpeg.real.log" ]] && cat "$TMP/ffmpeg.real.log" >&2
+    exit 1
+  fi
+  printf 'inactivefile\n'
+} | MIM_TEST_DIR="$TMP" "$TMP/ffmpeg" -stdinctrl -activefile -i "$TMP/media/test.ts" -vcodec mpeg4 -b 4M -f mpegts - 2>&1)"
 [[ "$ctrl" == *"CHILD_STDIN:videorateadapt -500"* ]]
 [[ "$ctrl" == *"CHILD_TERM"* ]]
 
@@ -313,11 +332,15 @@ exit 42
 SH
 chmod +x "$TMP/ffmpeg.real"
 set +e
-"$TMP/ffmpeg" -stdinctrl -i "$TMP/media/test.ts" -vcodec mpeg4 -b 4M -f mpegts - >/dev/null 2>&1
+{ sleep .2; } | "$TMP/ffmpeg" -stdinctrl -i "$TMP/media/test.ts" -vcodec mpeg4 -b 4M -f mpegts - >/dev/null 2>&1
 fail_rc=$?
 set -e
 [[ "$fail_rc" -eq 0 ]]
-grep -q 'contained ffmpeg failure rc=42 -> MIM exit rc=0' "$TMP/ffmpeg.real.log"
+grep -q 'contained ffmpeg failure rc=42 -> MIM exit rc=0' "$TMP/ffmpeg.real.log" || {
+  echo "ERROR: abnormal child exit was not logged as contained" >&2
+  tail -80 "$TMP/ffmpeg.real.log" >&2
+  exit 1
+}
 
 # Closing FFmpeg stdin before a forwarded runtime-control command must not kill
 # the MIM with SIGPIPE. The broken control pipe is logged and contained.
