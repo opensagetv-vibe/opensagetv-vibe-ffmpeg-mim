@@ -10,12 +10,17 @@ if command -v g++ >/dev/null 2>&1; then
   g++ -std=c++17 -fsyntax-only "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp"
 fi
 
+test -x "$ROOT/build_opensagetv_vibe_builder_image.sh"
+test -x "$ROOT/cleanup_old_opensagetv_vibe_build_images.sh"
+grep -q 'opensagetv-vibe-ffmpeg-mim-builder:9.0.1-v5' \
+  "$ROOT/build_opensagetv_vibe_builder_image.sh"
+
 grep -q 'opensagetv-vibe-ffmpeg-mim-builder:9.0.1-v5' "$ROOT/settings.ini"
 
 grep -q '^SAGETV_BUILDER_CONTAINER=opensagetv-vibe-ffmpeg-mim-builder$' "$ROOT/settings.ini"
 grep -q -- '--name "$CONTAINER"' "$ROOT/code/docker/run_unified_builder.sh"
 grep -q '"$IMAGE" "$MODE"' "$ROOT/code/docker/run_unified_builder.sh"
-! grep -q 'build_sagetv_builder_image.sh' "$ROOT/code/docker/run_unified_builder.sh"
+! grep -q 'build_opensagetv_vibe_builder_image.sh' "$ROOT/code/docker/run_unified_builder.sh"
 if grep -Eq 'sagetv-ffmpeg-build-(linux|windows)' "$ROOT/code/docker/run_unified_builder.sh"; then
   echo "ERROR: target-specific runtime container names are not allowed" >&2
   exit 1

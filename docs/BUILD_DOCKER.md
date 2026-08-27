@@ -58,13 +58,13 @@ There is no Win32 build stage, no `base-win32` build dependency, no Win32 FFmpeg
 
 ```bash
 chmod +x *.sh code/docker/*.sh code/mim/tests/*.sh code/tools/*.py
-./build_sagetv_builder_image.sh
+./build_opensagetv_vibe_builder_image.sh
 ```
 
 Force a rebuild after changing the Docker definition:
 
 ```bash
-./build_sagetv_builder_image.sh --rebuild
+./build_opensagetv_vibe_builder_image.sh --rebuild
 ```
 
 ## Build Linux only
@@ -73,7 +73,7 @@ Force a rebuild after changing the Docker definition:
 ./build_linux_sagetv_ffmpeg_static.sh
 ```
 
-This command **does not build/rebuild the Docker builder image**. It requires the existing `opensagetv-vibe-ffmpeg-mim-builder:9.0.1-v5` image and fails with a clear error if that image is missing. Only `build_sagetv_builder_image.sh` changes/creates the builder image.
+This command **does not build/rebuild the Docker builder image**. It requires the existing `opensagetv-vibe-ffmpeg-mim-builder:9.0.1-v5` image and fails with a clear error if that image is missing. Only `build_opensagetv_vibe_builder_image.sh` changes/creates the builder image.
 
 ## Build both supported targets
 
@@ -105,7 +105,7 @@ build_all_sagetv_ffmpeg_static.bat
 After the v0.4.5 project is used with the existing v5 unified image, the bootstrap attempts to remove BtbN/source tags and old SageTV builder tags from previous versions, including legacy Win32 tags. If any remain visible in Docker Desktop, remove them manually with:
 
 ```bash
-./cleanup_old_sagetv_build_images.sh
+./cleanup_old_opensagetv_vibe_build_images.sh
 ```
 
 That helper intentionally knows the old Win32 image names only so it can delete them.

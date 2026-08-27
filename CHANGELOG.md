@@ -5,6 +5,10 @@
 - Renamed the project, shared build-container references, standalone builder
   image, named container, and BuildKit cache to the `opensagetv-vibe-*`
   namespace without changing the FFmpeg/MIM binary ABI.
+- Restored the first-time builder bootstrap and targeted legacy-image cleanup
+  scripts that were documented but omitted when the repository was separated.
+  The bootstrap limits source cleanup to its dedicated cache and does not run
+  a global Docker image prune.
 - Advanced the wrapper and FFmpeg build suffix to 0.4.5.
 - Fixed the FFmpeg option/control regression and retained deterministic
   `videorateadapt`, `inactivefile`, EOF, signal, and descendant-process teardown

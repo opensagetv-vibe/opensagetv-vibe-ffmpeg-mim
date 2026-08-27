@@ -16,7 +16,7 @@ docker info >/dev/null 2>&1 || { echo "ERROR: Docker daemon is not reachable." >
 
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
   echo "ERROR: required builder image is missing: $IMAGE" >&2
-  echo "Build it intentionally with: ./build_sagetv_builder_image.sh" >&2
+  echo "Build it intentionally with: ./build_opensagetv_vibe_builder_image.sh" >&2
   exit 1
 fi
 

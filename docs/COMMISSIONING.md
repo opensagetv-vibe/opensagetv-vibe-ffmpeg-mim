@@ -29,7 +29,7 @@ Docker is the only host build prerequisite.
 To create the builder when it is not already present:
 
 ```bash
-./build_sagetv_builder_image.sh
+./build_opensagetv_vibe_builder_image.sh
 ```
 
 Linux output is written to `output/linux-x64/`. The commissioning set is:
