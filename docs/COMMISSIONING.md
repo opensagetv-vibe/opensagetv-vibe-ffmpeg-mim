@@ -2,8 +2,9 @@
 
 ## Authoritative field state
 
-This package captures the source and deployment state tested on 2026-08-24.
-The separate Unraid development instance was:
+This package captures the source and deployment state through 2026-08-26.
+The current supported build uses the shared `opensagetv-dev` container. Earlier
+field diagnostics used a separate Unraid development instance:
 
 - container: `opensagetv-modern-dev`
 - SageTV address: `192.168.10.176`
@@ -21,11 +22,8 @@ handoff. Supply those locally during commissioning.
 Docker is the only host build prerequisite.
 
 ```bash
-docker image inspect sagetv-ffmpeg-mim-builder:9.0.1-v5
-./build_linux_sagetv_ffmpeg_static.sh
-./code/mim/tests/run_mim_tests.sh
-./code/mim/tests/run_init_tests.sh
-./validate_static.sh
+../opensagetv-build-env/opensagetv-dev.sh ffmpeg-linux
+../opensagetv-build-env/opensagetv-dev.sh test-mim
 ```
 
 To create the builder when it is not already present:
@@ -72,11 +70,17 @@ the `ffmpeg` executable used by SageTV.
   properties. The attempted 250 ms value caused inconsistent audio-only starts
   and must not be reused.
 
-## Important unresolved issue
+## Remaining commissioning boundary
 
-Live MiniClient playback is not fully commissioned. Some channels still begin
-with audio but no video, and software-encoded 59.94 fps channels have shown an
-initial stall. Evidence collected so far:
+The server-side causes reproduced from earlier black-video/audio-only starts
+have been corrected in 0.4.5: active inputs no longer use a reduced cached
+probe, hardware encoders undergo a bounded real encode preflight, and each GPU
+path uses compatible frame/upload/filter chains. Real generated growing and
+partially written streams now pass repeated audio/video integrity tests.
+
+Live Android MiniClient playback is still not fully commissioned because the
+client is not currently part of the automated harness. Older evidence retained
+for comparison was:
 
 - source MPEG-2 video and audio are detected correctly;
 - the strengthened readiness gate typically passes in 13-250 ms;
@@ -87,19 +91,17 @@ initial stall. Evidence collected so far:
 - preserving the original MPEG-4 Part 2 request produced neither audio nor video
   and was rolled back both in deployment and source.
 
-The deployed rollback point uses `libx264` for live files. Do not claim live-TV
-commissioning complete until multiple 29.97 and 59.94 channels, channel changes,
-join-in-progress playback, and repeated starts all produce continuous audio and
-video.
+Do not enable MIM by default until multiple real Android sessions, channels,
+channel changes, join-in-progress playback, and repeated starts all produce
+continuous audio and video. Also complete physical AMD VAAPI and NVIDIA NVENC
+tests; their option/filter construction is covered without hardware.
 
 ## Recommended next diagnostic
 
-Capture the exact Matroska bytes emitted by a successful and failed MIM session
-without changing the MiniClient contract. Run `ffprobe -show_streams`, inspect
-the first cluster/keyframe timestamps, and compare time-to-first video packet
-with time-to-first audio packet. This will distinguish an FFmpeg mux/encoder
-problem from a MiniClient decoder-start problem. Also record FFmpeg CPU use and
-effective encoding speed for 59.94 fps sources.
+Bring the Android MiniClient MCP/automation harness into the commissioning
+pipeline. Capture the exact Matroska bytes and client logs for any failed
+session, compare first audio/video packets and keyframe timestamps, and verify
+the client recovers without restart after a deliberately failed stream.
 
 ## Verification after deployment
 
@@ -113,4 +115,3 @@ tail -f ./ffmpeg.real.log
 Verify recorded playback first, then live 29.97 fps, live 59.94 fps, rapid
 channel changes, and join-in-progress playback. Restart the MiniClient after a
 failed stream because its decoder can remain stuck.
-

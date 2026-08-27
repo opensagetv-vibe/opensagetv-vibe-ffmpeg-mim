@@ -1,4 +1,4 @@
-# Unified Docker Builder — v0.4.4
+# Unified Docker Builder — v0.4.5
 
 The project uses one reusable Docker image:
 
@@ -50,7 +50,7 @@ Those BtbN images are referenced as temporary BuildKit stages. The bootstrap scr
 
 ## Why x86 was removed
 
-Win32/x86 added a separate compiler/toolchain/dependency environment and substantially increased image complexity and disk usage while modern hardware decode/encode support is primarily useful on 64-bit systems. v0.4.4 continues to support only Linux x64 and Windows x64.
+Win32/x86 added a separate compiler/toolchain/dependency environment and substantially increased image complexity and disk usage while modern hardware decode/encode support is primarily useful on 64-bit systems. v0.4.5 continues to support only Linux x64 and Windows x64.
 
 There is no Win32 build stage, no `base-win32` build dependency, no Win32 FFmpeg output, and no Win32 MIM output.
 
@@ -102,7 +102,7 @@ build_all_sagetv_ffmpeg_static.bat
 
 ## Removing images from older versions
 
-After the v0.4.4 project is used with the existing v5 unified image, the bootstrap attempts to remove BtbN/source tags and old SageTV builder tags from previous versions, including legacy Win32 tags. If any remain visible in Docker Desktop, remove them manually with:
+After the v0.4.5 project is used with the existing v5 unified image, the bootstrap attempts to remove BtbN/source tags and old SageTV builder tags from previous versions, including legacy Win32 tags. If any remain visible in Docker Desktop, remove them manually with:
 
 ```bash
 ./cleanup_old_sagetv_build_images.sh

@@ -2,7 +2,7 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 
-for f in "$ROOT"/*.sh "$ROOT"/code/docker/*.sh "$ROOT"/code/mim/tests/*.sh "$ROOT"/sagetv-runtime-docker/*.sh; do
+for f in "$ROOT"/*.sh "$ROOT"/code/docker/*.sh "$ROOT"/code/mim/tests/*.sh; do
   bash -n "$f"
 done
 python3 -m py_compile "$ROOT/code/tools/apply_videorateadapt.py"
@@ -38,7 +38,7 @@ for f in \
   fi
 done
 
-! grep -q 'windows-x86' "$ROOT/BUILD_MATRIX.md"
+! grep -q 'windows-x86' "$ROOT/docs/BUILD_MATRIX.md"
 ! grep -q 'output/windows-x86' "$ROOT/README.md"
 
 
@@ -56,27 +56,17 @@ grep -q 'cp "$PROJECT/diagnose_sagetv_abort.sh" "$OUT/diagnose_sagetv_abort.sh"'
 grep -q 'MIM_NAME=SageTVTranscoder.exe' "$ROOT/code/docker/build_target_unified.sh"
 
 
-# Merged Ubuntu 26 SageTV runtime requirements proven during branch testing.
-grep -q '^FROM ubuntu:26.04$' "$ROOT/sagetv-runtime-docker/Dockerfile"
-grep -q 'openjdk-11-jre-headless' "$ROOT/sagetv-runtime-docker/Dockerfile"
-grep -q 'libmfx-gen1.2' "$ROOT/sagetv-runtime-docker/Dockerfile"
-grep -q 'intel-media-va-driver-non-free' "$ROOT/sagetv-runtime-docker/Dockerfile"
-grep -q 'docker container inspect "$NAME"' "$ROOT/sagetv-runtime-docker/run-unraid.sh"
-grep -q 'qsv:hw,child_device=/dev/dri/renderD128' "$ROOT/sagetv-runtime-docker/gpu-check.sh"
+# Runtime Docker checks belong to the separate opensagetv-container project.
+# This repository validates only FFmpeg/MIM source, configuration, and output.
 
-grep -q -- '--restart unless-stopped' "$ROOT/sagetv-runtime-docker/run-unraid.sh"
-grep -q 'docker update --restart unless-stopped' "$ROOT/sagetv-runtime-docker/enable-crash-restart.sh"
-grep -q 'tini' "$ROOT/sagetv-runtime-docker/Dockerfile"
-grep -q 'sagetv-supervisor' "$ROOT/sagetv-runtime-docker/Dockerfile"
-grep -q -- '--ulimit core=-1' "$ROOT/sagetv-runtime-docker/run-unraid.sh"
-grep -q -- '--cap-add SYS_PTRACE' "$ROOT/sagetv-runtime-docker/run-unraid.sh"
-grep -q -- '--security-opt seccomp=unconfined' "$ROOT/sagetv-runtime-docker/run-unraid.sh"
-grep -q 'ErrorFile=.*hs_err_pid%p.log' "$ROOT/sagetv-runtime-docker/entrypoint.sh"
-grep -q 'keeping Docker container alive' "$ROOT/sagetv-runtime-docker/sagetv-supervisor.sh"
-bash -n "$ROOT/sagetv-runtime-docker/sagetv-supervisor.sh"
-
-# v0.4.4 keeps the v0.4.3 containment and closes MiniPlayer switch teardown paths.
+# v0.4.5 keeps containment and closes MiniPlayer switch teardown paths.
+grep -q 'MIM_VERSION = "0.4.5"' "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp"
 grep -q 'qsv:hw,child_device=' "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp"
+grep -q 'hardware_encode_preflight' "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp"
+grep -q '^preflight_hardware_encode=true$' "$ROOT/ffmpeg.real.ini"
+grep -q 'probe-cache BYPASS active input=' "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp"
+grep -q 'yadif_cuda=deint=interlaced' "$ROOT/ffmpeg.real.ini"
+grep -q 'format=nv12,hwupload' "$ROOT/ffmpeg.real.ini"
 grep -q 'preserve_sagetv_output_contract' "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp"
 grep -q '^preserve_sagetv_output_contract=true$' "$ROOT/ffmpeg.real.ini"
 grep -q 'const bool hardware_decode=' "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp"
@@ -102,4 +92,4 @@ grep -q 'log_name="./ffmpeg.real.log"' "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp"
 grep -q 'remove_opt_value(a,{"-vsync","-fps_mode"})' "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp"
 grep -q "does not contain the SageTV -sagetvratectrl patch marker" "$ROOT/code/docker/build_target_unified.sh"
 
-echo '[PASS] v0.4.4 MIM + runtime-v4 supervised Docker validation'
+echo '[PASS] v0.4.5 FFmpeg/MIM static validation'

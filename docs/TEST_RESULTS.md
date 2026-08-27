@@ -1,4 +1,37 @@
-# Test Results — v0.4.4
+# Test Results — v0.4.5
+
+## Current non-Android validation (2026-08-26)
+
+- `[PASS]` clean Linux amd64 FFmpeg/MIM build and SHA-256 validation.
+- `[PASS]` clean Windows amd64 FFmpeg/MIM build and SHA-256 validation.
+- `[PASS]` `ffmpeg_init.sh` install, backup, rollback, and older-MIM detection.
+- `[PASS]` argument ordering and `videorateadapt`/`inactivefile` forwarding.
+- `[PASS]` EOF, SIGTERM, SIGKILL parent-death, descendant, EPIPE, and abnormal
+  child-exit containment; no orphan `ffmpeg.real` remained.
+- `[PASS]` completed MPEG-TS to Matroska with H.264 video and MP2 audio.
+- `[PASS]` growing/join-in-progress MPEG-TS at 59.94 fps.
+- `[PASS]` three repeated live-style starts, handoffs, and teardowns.
+- `[PASS]` every emitted test stream contained audio and video, started within
+  1.5 seconds of each other, met the minimum video-packet count, and fully
+  decoded without error.
+- `[PASS]` first output was 222 ms for join-in-progress and 145–149 ms for the
+  three repeated starts in the final unified run.
+- `[PASS]` active inputs bypass the reduced probe cache; completed unchanged
+  recordings retain the cache optimization.
+- `[PASS]` simulated hardware initialization failure selects `libx264` before
+  the stream starts.
+- `[PASS]` Intel QSV and Intel VAAPI real one-frame preflight and complete
+  audio/video transcodes on Unraid hardware.
+- `[PASS]` VAAPI software-decode/upload/encode and full hardware-decode paths
+  on Unraid hardware.
+- `[PASS]` the final MIM binary embedded in production/debug images exactly
+  matches the unified Linux output SHA-256.
+
+The final 2026-08-26 unified `all` command returned `BUILD PASSED`. The
+production image clean-appdata test also passed. MIM remains disabled because
+server-only tests cannot validate Android rendering/decoder recovery and no AMD
+or NVIDIA device was available. The sections below retain older findings as
+historical regression context; they are not the current 0.4.5 result.
 
 ## Merge revalidation (2026-08-24)
 
@@ -64,7 +97,7 @@ Live status before v0.4.4 deployment: full QSV playback works and greatly lowers
 - `[PASS]` `vpl-inspect` reports Intel implementations.
 - `[PASS]` Ubuntu system FFmpeg `h264_qsv` test encoded 60 frames and exited 0.
 
-## Still required after compilation
+## Historical requirements after v0.4.4 compilation
 
 The project-built v0.4.1 `ffmpeg.real` was compiled/deployed and successfully reached the Intel QSV/iHD path during live MiniPlayer transcoding. The remaining failure was the MiniPlayer wire-format rewrite, corrected in v0.4.2.
 
@@ -78,7 +111,9 @@ and verify the `PROJECT FFMPEG.REAL QSV TEST` section still succeeds. Then repea
 
 ## Windows
 
-The final Windows x64 PE build still needs to be compiled/tested with the supplied BtbN/Docker toolchain on the user's build machine.
+The Windows x64 PE build was compiled and checksum-validated with the supplied
+BtbN-derived toolchain in the unified 2026-08-26 run. Runtime playback on a
+Windows SageTV installation remains outside the Linux/Unraid release gate.
 
 ## Runtime Docker v4 validation - 2026-08-24
 
@@ -108,7 +143,7 @@ Manual validation: removing/renaming the triggering channel-logo PNG stopped the
 
 A diagnostic `DT_SYMBOLIC` binary made from the supplied original `libImageLoader.so` passed a local symbol-preemption regression test. This demonstrates the old bundled-libpng/interposition mechanism, but a real user deployment test of that binary is not recorded here. The preferred Ubuntu 26 source modernization is system libpng16 + updated ImageLoader error handling/tests.
 
-### Current QSV regression after Codex Docker rebuild
+### Historical QSV regression after the v0.4.4 Docker rebuild
 
 FAIL / unresolved:
 

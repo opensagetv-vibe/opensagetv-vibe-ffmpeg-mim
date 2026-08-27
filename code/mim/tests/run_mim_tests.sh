@@ -14,14 +14,23 @@ cp "$MIM" "$TMP/ffmpeg"
 cat > "$TMP/ffmpeg.real" <<'SH'
 #!/usr/bin/env bash
 if [[ " $* " == *" -encoders "* ]]; then
+  if [[ "${MIM_TEST_SOFTWARE_ONLY:-0}" == 1 ]]; then
+    echo ' V..... libx264'
+    exit 0
+  fi
   cat <<'EOT'
  V....D h264_qsv
  V....D hevc_qsv
  V....D h264_nvenc
  V....D hevc_nvenc
+ V....D h264_vaapi
+ V....D hevc_vaapi
  V..... libx264
  V..... libx265
 EOT
+  exit 0
+fi
+if [[ " $* " == *" -f lavfi "* && " $* " == *" -frames:v 1 "* ]]; then
   exit 0
 fi
 printf 'FAKE_FFMPEG_ARGS:'
@@ -40,6 +49,11 @@ chmod +x "$TMP/ffprobe"
 cp "$ROOT/ffmpeg.real.ini" "$TMP/ffmpeg.real.ini"
 # Force deterministic HW backend; explicit backend trusts the compiled encoder list.
 sed -i 's/^backend=auto$/backend=qsv/' "$TMP/ffmpeg.real.ini"
+# These fixtures replace ffmpeg.real repeatedly with processes that exist only
+# to exercise stdin control and process-group teardown.  Hardware preflight has
+# separate coverage below; running it here would consume the lifecycle timeout
+# before the process under test is started.
+sed -i 's/^preflight_hardware_encode=true$/preflight_hardware_encode=false/' "$TMP/ffmpeg.real.ini"
 # Control/teardown tests use a one-byte synthetic TS with no video headers.
 # The active-video readiness gate has its own integration coverage and would
 # intentionally delay launching the fake child used by these unit tests.
@@ -48,7 +62,7 @@ mkdir -p "$TMP/media"
 printf '\x47' > "$TMP/media/test.ts"
 
 v="$($TMP/ffmpeg --mim-version)"
-[[ "$v" == *"SageTV FFmpeg MIM 0.4.4"* ]]
+[[ "$v" == *"SageTV FFmpeg MIM 0.4.5"* ]]
 
 # Management command must be untouched.
 d="$($TMP/ffmpeg --mim-dry-run -version)"
@@ -64,7 +78,7 @@ d="$($TMP/ffmpeg --mim-dry-run -dumpmetadata -v 2 -i "$TMP/media/test.ts")"
 [[ "$d" == *"-loglevel info"* ]]
 [[ "$d" == *"-i $TMP/media/test.ts"* ]]
 [[ -f "$TMP/ffmpeg.real.log" ]]
-grep -q 'mim-start version=0.4.4' "$TMP/ffmpeg.real.log"
+grep -q 'mim-start version=0.4.5' "$TMP/ffmpeg.real.log"
 
 # A normal non-SageTV encode command remains transparent even if it uses a mapped codec.
 d="$($TMP/ffmpeg --mim-dry-run -i "$TMP/media/test.ts" -c:v libx264 -f null -)"
@@ -162,11 +176,86 @@ d="$(SAGETV_FFMPEG_MIM_INI="$TMP/ffmpeg.hwdecode.ini" "$TMP/ffmpeg" --mim-dry-ru
 [[ "$d" == *"-vf deinterlace_qsv,scale_qsv=w=1280:h=720"* ]]
 [[ "$d" != *"-s 1280x720"* ]]
 
+# NVDEC produces CUDA frames. Hardware decode + scale must stay entirely on
+# CUDA filters instead of feeding CUDA frames into software yadif/scale.
+cp "$ROOT/ffmpeg.real.ini" "$TMP/ffmpeg.nvenc.ini"
+sed -i 's/^backend=auto$/backend=nvenc/' "$TMP/ffmpeg.nvenc.ini"
+d="$(SAGETV_FFMPEG_MIM_INI="$TMP/ffmpeg.nvenc.ini" "$TMP/ffmpeg" --mim-dry-run -stdinctrl -i "$TMP/media/test.ts" -vcodec mpeg4 -s 1280x720 -b 4M -f mpegts -)"
+[[ "$d" == *"backend=nvenc"* ]]
+[[ "$d" == *"-hwaccel cuda"* ]]
+[[ "$d" == *"-hwaccel_output_format cuda"* ]]
+[[ "$d" == *"-c:v h264_nvenc"* ]]
+[[ "$d" == *"-vf yadif_cuda=deint=interlaced,scale_cuda=w=1280:h=720"* ]]
+[[ "$d" != *"-s 1280x720"* ]]
+
+# VAAPI encode after software decode needs a device plus format/upload chain.
+# Merely selecting h264_vaapi with system-memory frames fails before video is
+# emitted, which previously presented as audio-only playback.
+cp "$ROOT/ffmpeg.real.ini" "$TMP/ffmpeg.vaapi-sw.ini"
+sed -i 's/^backend=auto$/backend=vaapi/' "$TMP/ffmpeg.vaapi-sw.ini"
+sed -i 's/^hardware_decode=true$/hardware_decode=false/' "$TMP/ffmpeg.vaapi-sw.ini"
+d="$(SAGETV_FFMPEG_MIM_INI="$TMP/ffmpeg.vaapi-sw.ini" "$TMP/ffmpeg" --mim-dry-run -stdinctrl -i "$TMP/media/test.ts" -vcodec mpeg4 -s 1280x720 -b 4M -f mpegts -)"
+[[ "$d" == *"backend=vaapi"* ]]
+[[ "$d" == *"-vaapi_device /dev/dri/renderD128"* ]]
+[[ "$d" != *"-hwaccel vaapi"* ]]
+[[ "$d" == *"-c:v h264_vaapi"* ]]
+[[ "$d" == *"-vf yadif=deint=interlaced,format=nv12,hwupload,scale_vaapi=w=1280:h=720"* ]]
+[[ "$d" != *"-s 1280x720"* ]]
+
+# Full VAAPI decode keeps the filters and encoder on VAAPI frames.
+cp "$ROOT/ffmpeg.real.ini" "$TMP/ffmpeg.vaapi-hw.ini"
+sed -i 's/^backend=auto$/backend=vaapi/' "$TMP/ffmpeg.vaapi-hw.ini"
+d="$(SAGETV_FFMPEG_MIM_INI="$TMP/ffmpeg.vaapi-hw.ini" "$TMP/ffmpeg" --mim-dry-run -stdinctrl -i "$TMP/media/test.ts" -vcodec mpeg4 -s 1280x720 -b 4M -f mpegts -)"
+[[ "$d" == *"-hwaccel vaapi"* ]]
+[[ "$d" == *"-hwaccel_device /dev/dri/renderD128"* ]]
+[[ "$d" == *"-hwaccel_output_format vaapi"* ]]
+[[ "$d" == *"-vf deinterlace_vaapi=auto=1,scale_vaapi=w=1280:h=720"* ]]
+[[ "$d" != *"-s 1280x720"* ]]
+
+# If a requested/explicit hardware encoder is not actually present in the
+# bundled FFmpeg capabilities, select the matching software encoder rather
+# than copying, passing through, or emitting a command that cannot start.
+rm -rf "$TMP/cache/capabilities"
+d="$(MIM_TEST_SOFTWARE_ONLY=1 "$TMP/ffmpeg" --mim-dry-run -stdinctrl -i "$TMP/media/test.ts" -vcodec mpeg4 -b 4M -f mpegts -)"
+[[ "$d" == *"backend=software"* ]]
+[[ "$d" == *"-c:v libx264"* ]]
+[[ "$d" != *"-init_hw_device"* ]]
+[[ "$d" != *"-hwaccel"* ]]
+rm -rf "$TMP/cache/capabilities"
+
+# Advertising a hardware encoder is insufficient: drivers can be installed
+# while device/session initialization still fails.  A failed bounded preflight
+# must fall back to software before SageTV starts a stream (the former failure
+# mode produced audio-only or black-video playback).
+mkdir -p "$TMP/preflight"
+cp "$MIM" "$TMP/preflight/ffmpeg"
+cp "$TMP/ffprobe" "$TMP/preflight/ffprobe"
+cp "$ROOT/ffmpeg.real.ini" "$TMP/preflight/ffmpeg.real.ini"
+sed -i 's/^backend=auto$/backend=qsv/' "$TMP/preflight/ffmpeg.real.ini"
+cat > "$TMP/preflight/ffmpeg.real" <<'SH'
+#!/usr/bin/env bash
+if [[ " $* " == *" -encoders "* ]]; then
+  printf ' V....D h264_qsv\n V..... libx264\n'
+  exit 0
+fi
+if [[ " $* " == *" -f lavfi "* && " $* " == *" -frames:v 1 "* ]]; then
+  echo 'simulated QSV session initialization failure' >&2
+  exit 23
+fi
+exit 0
+SH
+chmod +x "$TMP/preflight/ffmpeg.real" "$TMP/preflight/ffprobe"
+d="$("$TMP/preflight/ffmpeg" --mim-dry-run -stdinctrl -i "$TMP/media/test.ts" -vcodec mpeg4 -b 4M -f mpegts -)"
+[[ "$d" == *"backend=software"* ]]
+[[ "$d" == *"-c:v libx264"* ]]
+[[ "$d" != *"h264_qsv"* ]]
+grep -q 'hardware preflight failed backend=qsv encoder=h264_qsv rc=23' "$TMP/preflight/ffmpeg.real.log"
+
 # Verify live SageTV control handling on an actual transcode:
 # videorateadapt is forwarded; inactivefile terminates stock-follow child.
 cat > "$TMP/ffmpeg.real" <<'SH'
 #!/usr/bin/env bash
-if [[ " $* " == *" -encoders "* ]]; then echo ' V....D h264_qsv'; exit 0; fi
+if [[ " $* " == *" -encoders "* ]]; then printf ' V....D h264_qsv\n V..... libx264\n'; exit 0; fi
 trap 'echo CHILD_TERM; exit 0' TERM
 touch "$MIM_TEST_DIR/control.ready"
 while IFS= read -r line; do
@@ -191,11 +280,11 @@ ctrl="$({
 [[ "$ctrl" == *"CHILD_STDIN:videorateadapt -500"* ]]
 [[ "$ctrl" == *"CHILD_TERM"* ]]
 
-# v0.4.4 retains v0.4.3 crash containment: STOP must target the isolated FFmpeg process group,
+# v0.4.5 retains the crash containment: STOP must target the isolated FFmpeg process group,
 # including helper descendants, without terminating the MIM/SageTV parent.
 cat > "$TMP/ffmpeg.real" <<'SH'
 #!/usr/bin/env bash
-if [[ " $* " == *" -encoders "* ]]; then echo ' V....D h264_qsv'; exit 0; fi
+if [[ " $* " == *" -encoders "* ]]; then printf ' V....D h264_qsv\n V..... libx264\n'; exit 0; fi
 trap 'touch "$MIM_TEST_DIR/direct.term"; exit 0' TERM
 (
   trap 'touch "$MIM_TEST_DIR/descendant.term"; exit 0' TERM
@@ -220,13 +309,13 @@ grep -q 'safety: ffmpeg child isolated' "$TMP/ffmpeg.real.log"
 grep -q 'ffmpeg process-group pgid=' "$TMP/ffmpeg.real.log"
 
 
-# v0.4.4 MiniPlayer full-switch teardown: SageTV may close the MIM stdin
+# MiniPlayer full-switch teardown: SageTV may close the MIM stdin
 # without first writing STOP/QUIT. EOF must terminate the isolated FFmpeg
 # process group, including descendants, so no old QSV transcode survives into
 # the next MiniPlayer initialization.
 cat > "$TMP/ffmpeg.real" <<'SH'
 #!/usr/bin/env bash
-if [[ " $* " == *" -encoders "* ]]; then echo ' V....D h264_qsv'; exit 0; fi
+if [[ " $* " == *" -encoders "* ]]; then printf ' V....D h264_qsv\n V..... libx264\n'; exit 0; fi
 trap 'touch "$MIM_TEST_DIR/eof.direct.term"; exit 0' TERM
 (
   trap 'touch "$MIM_TEST_DIR/eof.descendant.term"; exit 0' TERM
@@ -255,7 +344,7 @@ grep -Eq 'control: stdin (EOF|HUP) -> terminate ffmpeg process-group' "$TMP/ffmp
 # then exit; FFmpeg and descendants must not be orphaned across a file switch.
 cat > "$TMP/ffmpeg.real" <<'SH'
 #!/usr/bin/env bash
-if [[ " $* " == *" -encoders "* ]]; then echo ' V....D h264_qsv'; exit 0; fi
+if [[ " $* " == *" -encoders "* ]]; then printf ' V....D h264_qsv\n V..... libx264\n'; exit 0; fi
 trap 'touch "$MIM_TEST_DIR/sig.direct.term"; exit 0' TERM
 (
   trap 'touch "$MIM_TEST_DIR/sig.descendant.term"; exit 0' TERM
@@ -293,7 +382,7 @@ grep -q 'control: parent signal=15 -> terminate ffmpeg process-group' "$TMP/ffmp
 # ffmpeg.real process cannot survive indefinitely.
 cat > "$TMP/ffmpeg.real" <<'SH'
 #!/usr/bin/env bash
-if [[ " $* " == *" -encoders "* ]]; then echo ' V....D h264_qsv'; exit 0; fi
+if [[ " $* " == *" -encoders "* ]]; then printf ' V....D h264_qsv\n V..... libx264\n'; exit 0; fi
 echo $$ > "$MIM_TEST_DIR/pdeath.pid"
 touch "$MIM_TEST_DIR/pdeath.ready"
 while IFS= read -r line; do :; done
@@ -327,7 +416,7 @@ grep -q 'safety: parent-death SIGKILL configured for ffmpeg child' "$TMP/ffmpeg.
 # of returning a failed transcoder process status to SageTV.
 cat > "$TMP/ffmpeg.real" <<'SH'
 #!/usr/bin/env bash
-if [[ " $* " == *" -encoders "* ]]; then echo ' V....D h264_qsv'; exit 0; fi
+if [[ " $* " == *" -encoders "* ]]; then printf ' V....D h264_qsv\n V..... libx264\n'; exit 0; fi
 exit 42
 SH
 chmod +x "$TMP/ffmpeg.real"
@@ -346,7 +435,7 @@ grep -q 'contained ffmpeg failure rc=42 -> MIM exit rc=0' "$TMP/ffmpeg.real.log"
 # the MIM with SIGPIPE. The broken control pipe is logged and contained.
 cat > "$TMP/ffmpeg.real" <<'SH'
 #!/usr/bin/env bash
-if [[ " $* " == *" -encoders "* ]]; then echo ' V....D h264_qsv'; exit 0; fi
+if [[ " $* " == *" -encoders "* ]]; then printf ' V....D h264_qsv\n V..... libx264\n'; exit 0; fi
 exec 0<&-
 sleep 1
 exit 0

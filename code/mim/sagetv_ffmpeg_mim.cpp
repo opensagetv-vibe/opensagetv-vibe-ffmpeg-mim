@@ -21,7 +21,9 @@
 #include <vector>
 
 #ifdef _WIN32
+#ifndef NOMINMAX
 #define NOMINMAX
+#endif
 #include <windows.h>
 #include <io.h>
 static_assert(sizeof(void*) == 8, "SageTV FFmpeg MIM supports Windows x64 only.");
@@ -40,7 +42,7 @@ static_assert(sizeof(void*) == 8, "SageTV FFmpeg MIM supports Windows x64 only."
 
 namespace fs = std::filesystem;
 
-static constexpr const char* MIM_VERSION = "0.4.4";
+static constexpr const char* MIM_VERSION = "0.4.5";
 
 static std::string trim(std::string s) {
     auto is_ws = [](unsigned char c){ return std::isspace(c) != 0; };
@@ -271,7 +273,7 @@ static std::string format_bitrate(long long bps) {
 struct ProbeCache {
     fs::path dir; Logger* log=nullptr;
     fs::path entry(const fs::path& input) const { return dir/(hex64(fnv1a64(fs::absolute(input).lexically_normal().string()))+".cache"); }
-    bool hit(const fs::path& input, bool active) {
+    bool hit(const fs::path& input) {
         auto p=entry(input); std::ifstream f(p); if(!f) return false;
         std::string line,path,stamp,identity; bool ok=false;
         while(std::getline(f,line)){
@@ -283,7 +285,6 @@ struct ProbeCache {
         if(!ok || path!=abs) return false;
         const auto current_id=file_identity(input);
         if(!identity.empty() && !current_id.empty() && identity!=current_id) return false;
-        if(active) return true;
         return stamp==file_stamp(input);
     }
     void populate_async(fs::path ffprobe, fs::path input, long long probesize, long long analyze) {
@@ -359,8 +360,81 @@ static bool linux_has_vendor(const std::string& vendor) {
     return false;
 }
 
+static bool hardware_encode_preflight(const Ini& ini, const fs::path& real,
+                                      const fs::path& cache_dir, Logger& log,
+                                      const std::string& backend,
+                                      const std::string& encoder) {
+#ifdef _WIN32
+    // The Linux/Unraid release is the commissioned runtime target. Windows
+    // keeps capability-based selection until a bounded native process runner
+    // is added; do not invoke the unrelated Windows timeout.exe utility.
+    (void)ini; (void)real; (void)cache_dir; (void)log; (void)backend; (void)encoder;
+    return true;
+#else
+    if(!ini.get_bool("hardware","preflight_hardware_encode",true) || backend=="software")
+        return true;
+    const fs::path timeout_exe="/usr/bin/timeout";
+    if(!native_file_exists(timeout_exe)) {
+        log.log("WARNING hardware preflight skipped because /usr/bin/timeout is unavailable");
+        return true;
+    }
+
+    auto dev=trim(ini.get("hardware","linux_render_device","/dev/dri/renderD128"));
+    std::error_code ec;
+    fs::create_directories(cache_dir,ec);
+    const auto cache_key=hex64(fnv1a64(real.string()+":"+file_stamp(real)+":"+
+                                           backend+":"+encoder+":"+dev));
+    const auto cache_file=cache_dir/("preflight-"+cache_key+".ok");
+    if(native_file_exists(cache_file)) {
+        log.log("hardware preflight cache HIT backend=",backend," encoder=",encoder);
+        return true;
+    }
+
+    long long timeout_ms=std::max<long long>(1000,
+        ini.get_ll("hardware","preflight_timeout_ms",5000));
+    long long timeout_seconds=std::max<long long>(1,(timeout_ms+999)/1000);
+    std::vector<std::string> args={"--signal=KILL",std::to_string(timeout_seconds)+"s",
+        real.string(),"-hide_banner","-loglevel","error"};
+    if(backend=="qsv") {
+        args.insert(args.end(),{"-init_hw_device","qsv:hw,child_device="+dev});
+    } else if(backend=="vaapi") {
+        args.insert(args.end(),{"-vaapi_device",dev});
+    }
+    args.insert(args.end(),{"-f","lavfi","-i","color=black:size=64x64:rate=1",
+                            "-frames:v","1","-an"});
+    if(backend=="vaapi")
+        args.insert(args.end(),{"-vf","format=nv12,hwupload"});
+    args.insert(args.end(),{"-c:v",encoder,"-f","null","-"});
+
+    auto [rc,output]=run_capture(timeout_exe,args);
+    if(rc!=0) {
+        if(output.size()>1000) output.resize(1000);
+        for(char& c:output) if(c=='\r' || c=='\n') c=' ';
+        log.log("WARNING hardware preflight failed backend=",backend,
+                " encoder=",encoder," rc=",rc," diagnostic=",output);
+        return false;
+    }
+
+    const auto temporary=cache_file.string()+".tmp."+std::to_string((long long)getpid());
+    {
+        std::ofstream saved(temporary,std::ios::trunc);
+        saved << "backend=" << backend << "\nencoder=" << encoder << "\n";
+    }
+    fs::rename(temporary,cache_file,ec);
+    if(ec) {
+        fs::remove(cache_file,ec);
+        ec.clear();
+        fs::rename(temporary,cache_file,ec);
+    }
+    if(ec) fs::remove(temporary,ec);
+    log.log("hardware preflight PASS backend=",backend," encoder=",encoder);
+    return true;
+#endif
+}
+
 static std::string choose_backend(const Ini& ini, const PlatformInfo& p, const fs::path& real,
-                                  const fs::path& cache, Logger& log, const std::string& family) {
+                                  const fs::path& cache, Logger& log, const std::string& family,
+                                  bool hardware_allowed=true) {
     auto configured=lower(ini.get("hardware","backend","auto"));
     auto caps=load_capabilities(real,cache,log);
     auto has=[&](const std::string& e){return !e.empty() && caps.find(e)!=std::string::npos;};
@@ -375,24 +449,40 @@ static std::string choose_backend(const Ini& ini, const PlatformInfo& p, const f
         return std::string("h264_")+b;
     };
 
+    // A configured backend can also occur in the preference list. Keep the
+    // bounded runtime result for this selection pass so an unavailable device
+    // cannot impose the preflight timeout twice before software fallback.
+    std::map<std::string,bool> preflight_results;
+    auto preflight=[&](const std::string& b){
+        const auto key=b+":"+enc(b);
+        const auto found=preflight_results.find(key);
+        if(found!=preflight_results.end()) return found->second;
+        const bool usable=hardware_encode_preflight(ini,real,cache,log,b,enc(b));
+        preflight_results.emplace(key,usable);
+        return usable;
+    };
+
     auto backend_usable=[&](const std::string& b){
+        if(!hardware_allowed && b!="software") return false;
         if(!has(enc(b))) return false;
 #ifndef _WIN32
-        if(b=="qsv") return linux_has_vendor("0x8086");
-        if(b=="nvenc") return fs::exists("/dev/nvidiactl")||fs::exists("/dev/nvidia0");
-        if(b=="vaapi") return linux_has_vendor("0x8086")||linux_has_vendor("0x1002");
+        if(b=="qsv" && !linux_has_vendor("0x8086")) return false;
+        if(b=="nvenc" && !(fs::exists("/dev/nvidiactl")||fs::exists("/dev/nvidia0"))) return false;
+        if(b=="vaapi" && !(linux_has_vendor("0x8086")||linux_has_vendor("0x1002"))) return false;
         if(b=="amf" || b=="d3d12va") return false;
 #else
         if(b=="vaapi") return false;
 #endif
-        return true;
+        return b=="software" || preflight(b);
     };
 
     if(configured!="auto") {
         // An explicitly configured backend is authoritative. Require the encoder to be
-        // compiled in, but do not second-guess device presence; this also supports
-        // service/container setups where host GPU nodes are exposed later at runtime.
-        if(has(enc(configured))) return configured;
+        // compiled in and, on Linux, pass the bounded runtime preflight. The
+        // preflight itself is authoritative for container device visibility;
+        // a simple host-path check is not used for explicit configurations.
+        if((hardware_allowed || configured=="software") && has(enc(configured)) &&
+           (configured=="software" || preflight(configured))) return configured;
         log.log("WARNING configured backend=",configured," does not expose ",enc(configured),"; falling back");
     }
 
@@ -552,7 +642,7 @@ static std::vector<std::string> rewrite_args(const Ini& ini, const PlatformInfo&
                 a.insert(a.begin()+*ip,{"-follow","1"});
             } else log.log("WARNING activefile stock_follow cannot be applied to non-local/stv input");
         } else if(strategy!="disabled") {
-            log.log("WARNING active_file strategy '",strategy,"' not implemented in v0.4.4; treating as disabled");
+            log.log("WARNING active_file strategy '",strategy,"' not implemented in v0.4.5; treating as disabled");
         }
     }
 
@@ -607,10 +697,15 @@ static std::vector<std::string> rewrite_args(const Ini& ini, const PlatformInfo&
         return a;
     }
 
-    // Probe cache: first launch is normal; a background ffprobe fills the cache. Restarts use fast probing.
+    // Probe cache: completed, unchanged recordings may use a smaller discovery
+    // probe after a background ffprobe has validated the exact file stamp.
+    // Never use that shortcut for an active/growing input. The cache records
+    // only that video existed; it does not inject FFprobe's stream metadata
+    // into FFmpeg. A reduced 64 KiB/128-packet probe on a later active start
+    // could therefore miss audio or video depending on current TS packet order.
     if(input && native_file_exists(*input) && ini.get_bool("probe_cache","enabled",true)) {
         ProbeCache pc{exe_dir/ini.get("probe_cache","directory","cache/probe"),&log};
-        bool hit=pc.hit(*input,active);
+        bool hit=!active && pc.hit(*input);
         long long normal_probe=ini.get_ll("input","probesize",300000), normal_an=ini.get_ll("input","analyzeduration",300000);
         if(hit) {
             set_input_opt(a,{"-probesize"},"-probesize",std::to_string(ini.get_ll("probe_cache","cached_probesize",65536)));
@@ -621,8 +716,9 @@ static std::vector<std::string> rewrite_args(const Ini& ini, const PlatformInfo&
         } else {
             set_input_opt(a,{"-probesize"},"-probesize",std::to_string(normal_probe));
             set_input_opt(a,{"-analyzeduration"},"-analyzeduration",std::to_string(normal_an));
-            if(native_file_exists(ffprobe)) pc.populate_async(ffprobe,*input,normal_probe,normal_an);
-            log.log("probe-cache MISS input=",input->string());
+            if(!active && native_file_exists(ffprobe))
+                pc.populate_async(ffprobe,*input,normal_probe,normal_an);
+            log.log(active ? "probe-cache BYPASS active input=" : "probe-cache MISS input=",input->string());
         }
     } else {
         if(lower(ini.get("input","probesize_mode","override"))=="override") set_input_opt(a,{"-probesize"},"-probesize",ini.get("input","probesize","300000"));
@@ -636,7 +732,11 @@ static std::vector<std::string> rewrite_args(const Ini& ini, const PlatformInfo&
     if(ini.get_bool("seek","fast_seek",false)) { auto pos=input_option_pos(a); a.insert(a.begin()+pos,"-noaccurate_seek"); }
 
     const auto family=transcode_family.value_or("h264");
-    backend=choose_backend(ini,p,real,exe_dir/"cache/capabilities",log,family);
+    const bool active_hardware_encode=ini.get_bool("hardware","active_file_hardware_encode",true);
+    if(active && !active_hardware_encode)
+        log.log("compat: active-file hardware encode disabled; selecting software without GPU preflight");
+    backend=choose_backend(ini,p,real,exe_dir/"cache/capabilities",log,family,
+                           !active || active_hardware_encode);
     if(backend=="unavailable") {
         auto fallback=lower(ini.get("transcode_map","on_encoder_unavailable","passthrough"));
         log.log("WARNING no encoder available for requested transcode family=",family," fallback=",fallback);
@@ -654,11 +754,6 @@ static std::vector<std::string> rewrite_args(const Ini& ini, const PlatformInfo&
     // leaves the MiniClient stuck on an audio-only Matroska stream. Permit live
     // jobs to use the deterministic software encoder while retaining the
     // selected GPU backend for completed/prerecorded files.
-    if(active && !ini.get_bool("hardware","active_file_hardware_encode",true) && backend!="software") {
-        log.log("compat: active-file hardware encode disabled; backend ",backend," -> software");
-        backend="software";
-    }
-
     // The custom FFmpeg rate-control hook is only needed for an actual encode job.
     if(stdinctrl && ini.get_bool("stdinctrl","enabled",true))
         a.insert(a.begin(),"-sagetvratectrl");
@@ -694,36 +789,84 @@ static std::vector<std::string> rewrite_args(const Ini& ini, const PlatformInfo&
     } else if (hardware_decode && backend=="nvenc") {
         set_input_opt(a,{"-hwaccel"},"-hwaccel","cuda");
         set_input_opt(a,{"-hwaccel_output_format"},"-hwaccel_output_format","cuda");
-    } else if (hardware_decode && backend=="vaapi") {
-        set_input_opt(a,{"-hwaccel"},"-hwaccel","vaapi");
-        set_input_opt(a,{"-hwaccel_output_format"},"-hwaccel_output_format","vaapi");
+    } else if (backend=="vaapi") {
         auto dev=trim(ini.get("hardware","linux_render_device","/dev/dri/renderD128"));
-        if(!dev.empty()) set_input_opt(a,{"-hwaccel_device"},"-hwaccel_device",dev);
+        // VAAPI encoding requires a device even when input decoding remains in
+        // software. -vaapi_device provides the hardware frames context used by
+        // the upload filter and encoder; -hwaccel_device alone is insufficient
+        // for the software-decode -> VAAPI-encode path.
+        if(!dev.empty()) set_input_opt(a,{"-vaapi_device"},"-vaapi_device",dev);
+        if(hardware_decode) {
+            set_input_opt(a,{"-hwaccel"},"-hwaccel","vaapi");
+            set_input_opt(a,{"-hwaccel_output_format"},"-hwaccel_output_format","vaapi");
+            if(!dev.empty()) set_input_opt(a,{"-hwaccel_device"},"-hwaccel_device",dev);
+        }
     }
 
-    // Restore the QSV deinterlace/scale behavior from the known-working shell
-    // wrapper when full QSV decode is explicitly enabled. With software decode
-    // (the default) leave SageTV's normal software scaling/filter path intact.
-    if(backend=="qsv" && hardware_decode) {
-        auto filter_mode=lower(ini.get("filters","deinterlace","auto"));
-        if(filter_mode=="on" || filter_mode=="auto") {
-            auto size=get_opt_value(a,{"-s"});
-            std::string vf;
-            if(size) {
-                auto x=lower(*size).find('x');
-                if(x!=std::string::npos && x>0 && x+1<size->size()) {
-                    auto w=size->substr(0,x), h=size->substr(x+1);
-                    vf=ini.get("filters","qsv_scale","deinterlace_qsv,scale_qsv=w=%w%:h=%h%");
-                    auto replace_all=[](std::string& text,const std::string& from,const std::string& to){
-                        size_t p=0; while((p=text.find(from,p))!=std::string::npos){ text.replace(p,from.size(),to); p+=to.size(); }
-                    };
-                    replace_all(vf,"%w%",w); replace_all(vf,"%h%",h);
-                    remove_opt_value(a,{"-s"});
-                }
+    auto expand_filter_size=[](std::string text,const std::string& width,const std::string& height){
+        auto replace_all=[](std::string& value,const std::string& from,const std::string& to){
+            size_t p=0;
+            while((p=value.find(from,p))!=std::string::npos){
+                value.replace(p,from.size(),to);
+                p+=to.size();
             }
-            if(vf.empty()) vf=ini.get("filters","qsv_no_scale","deinterlace_qsv");
-            if(!trim(vf).empty()) set_output_opt(a,{"-vf","-filter:v"},"-vf",vf);
+        };
+        replace_all(text,"%w%",width);
+        replace_all(text,"%h%",height);
+        return text;
+    };
+    auto requested_size=get_opt_value(a,{"-s"});
+    std::string requested_width,requested_height;
+    if(requested_size) {
+        auto x=lower(*requested_size).find('x');
+        if(x!=std::string::npos && x>0 && x+1<requested_size->size()) {
+            requested_width=requested_size->substr(0,x);
+            requested_height=requested_size->substr(x+1);
         }
+    }
+    auto apply_hardware_filter=[&](const std::string& prefix,
+                                   const std::string& default_no_scale,
+                                   const std::string& default_scale){
+        auto filter_mode=lower(ini.get("filters","deinterlace","auto"));
+        if(filter_mode!="on" && filter_mode!="auto") return;
+        std::string vf;
+        if(!requested_width.empty() && !requested_height.empty()) {
+            vf=expand_filter_size(ini.get("filters",prefix+"_scale",default_scale),
+                                  requested_width,requested_height);
+            remove_opt_value(a,{"-s"});
+        } else {
+            vf=ini.get("filters",prefix+"_no_scale",default_no_scale);
+        }
+        if(!trim(vf).empty()) set_output_opt(a,{"-vf","-filter:v"},"-vf",vf);
+    };
+
+    // Restore backend-native deinterlace/scale filters when the decoder emits
+    // hardware frames. Software filters cannot consume QSV/CUDA/VAAPI frames
+    // and were the source of silent/no-video startup failures on non-QSV GPUs.
+    if(backend=="qsv" && hardware_decode) {
+        apply_hardware_filter("qsv","deinterlace_qsv",
+                              "deinterlace_qsv,scale_qsv=w=%w%:h=%h%");
+    } else if(backend=="nvenc" && hardware_decode) {
+        apply_hardware_filter("nvenc","yadif_cuda=deint=interlaced",
+                              "yadif_cuda=deint=interlaced,scale_cuda=w=%w%:h=%h%");
+    } else if(backend=="vaapi" && hardware_decode) {
+        apply_hardware_filter("vaapi","deinterlace_vaapi=auto=1",
+                              "deinterlace_vaapi=auto=1,scale_vaapi=w=%w%:h=%h%");
+    } else if(backend=="vaapi") {
+        // VAAPI encoders accept hardware frames only. Upload software-decoded
+        // frames explicitly, optionally scaling on the GPU. Without this chain
+        // h264_vaapi/hevc_vaapi fails before emitting a video packet.
+        std::string vf;
+        if(!requested_width.empty() && !requested_height.empty()) {
+            vf=expand_filter_size(ini.get("filters","vaapi_software_scale",
+                    "yadif=deint=interlaced,format=nv12,hwupload,scale_vaapi=w=%w%:h=%h%"),
+                    requested_width,requested_height);
+            remove_opt_value(a,{"-s"});
+        } else {
+            vf=ini.get("filters","vaapi_software_no_scale",
+                       "yadif=deint=interlaced,format=nv12,hwupload");
+        }
+        if(!trim(vf).empty()) set_output_opt(a,{"-vf","-filter:v"},"-vf",vf);
     }
 
     auto codec=codec_for_backend(ini,backend,family);

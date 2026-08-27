@@ -74,7 +74,7 @@ echo "================================================================"
   --ar="${AR:-ar}" \
   --ranlib="${RANLIB:-ranlib}" \
   --nm="${NM:-nm}" \
-  --extra-version="sagetv-mim-v0.4.4" \
+  --extra-version="sagetv-mim-v0.4.5" \
   || { cat ffbuild/config.log; exit 1; }
 
 JOBS="${BUILD_JOBS:-0}"
@@ -113,7 +113,7 @@ else
 fi
 
 {
-  echo "SageTV FFmpeg MIM v0.4.4"
+  echo "SageTV FFmpeg MIM v0.4.5"
   echo "builder_image=${SAGETV_BUILDER_VERSION:-unknown}"
   echo "target=$TARGET_ID"
   echo "ffmpeg_tag=$FFMPEG_TAG"

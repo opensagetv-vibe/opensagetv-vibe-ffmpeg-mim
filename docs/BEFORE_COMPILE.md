@@ -1,13 +1,14 @@
-# Before Compile — v0.4.4
+# Before Compile — v0.4.5
 
-Use this merged v0.4.4 tree. Do not compile from the old v0.3.9 handoff or the standalone Ubuntu 26 Docker ZIP.
+Use this v0.4.5 tree. Do not compile from an older handoff or the standalone
+Ubuntu 26 Docker ZIP.
 
 ## 1. Reuse the unified builder image
 
-v0.4.4 does **not** change the builder environment. Reuse the existing builder image:
+v0.4.5 does **not** change the builder environment. Reuse the existing builder image:
 
 ```bash
-chmod +x *.sh code/docker/*.sh code/mim/tests/*.sh code/tools/*.py sagetv-runtime-docker/*.sh
+chmod +x *.sh code/docker/*.sh code/mim/tests/*.sh code/tools/*.py
 ```
 
 Expected image:
@@ -16,13 +17,11 @@ Expected image:
 sagetv-ffmpeg-mim-builder:9.0.1-v5
 ```
 
-## 2. Apply restart safety to the existing Ubuntu 26 test container
+## 2. Runtime changes are separate
 
-This changes only Docker's restart policy; it does not rebuild or recreate the container:
-
-```bash
-./sagetv-runtime-docker/enable-crash-restart.sh
-```
+Runtime image, supervision, and Unraid restart-policy changes belong in the
+sibling `opensagetv-container` repository and are intentionally not duplicated
+in this add-on source tree.
 
 ## 3. Build Linux first
 
@@ -97,6 +96,9 @@ Do not change Ubuntu, Java, SageTV, `/dev/dri`, or the Intel driver again. That 
 
 ## What this build is validating
 
-v0.4.4 is specifically a MiniPlayer full-switch teardown fix. It does not change the proven QSV encoding/filter configuration. After deployment, repeat the same recording-to-recording switch that previously aborted SageTV and confirm the old `ffmpeg.real` is terminated before the next MIM invocation.
+v0.4.5 adds active-input probe safety, runtime GPU preflight/fallback, corrected
+backend-native filters, and real media/lifecycle tests. After deployment,
+repeat recording-to-recording and live-channel switches and confirm the old
+`ffmpeg.real` is terminated before the next MIM invocation.
 
 Do not rebuild the SageTV Ubuntu 26 runtime Docker for this test.
