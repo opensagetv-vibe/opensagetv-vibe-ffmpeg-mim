@@ -6,6 +6,15 @@ PROJECT=/project
 # shellcheck disable=SC1091
 source "$PROJECT/settings.ini"
 
+if [[ "${SAGETV_FFMPEG_TAG:-}" != "$FFMPEG_TAG" ]]; then
+  echo "ERROR: unified image FFmpeg tag '${SAGETV_FFMPEG_TAG:-unset}' does not match $FFMPEG_TAG" >&2
+  exit 1
+fi
+if [[ "${SAGETV_FFMPEG_COMMIT:-}" != "$FFMPEG_COMMIT" ]]; then
+  echo "ERROR: unified image FFmpeg commit '${SAGETV_FFMPEG_COMMIT:-unset}' does not match $FFMPEG_COMMIT" >&2
+  exit 1
+fi
+
 case "$TARGET_ID" in
   linux-x64)
     OUT="$PROJECT/output/linux-x64"
@@ -114,9 +123,11 @@ fi
 
 {
   echo "SageTV FFmpeg MIM v0.4.5"
-  echo "builder_image=${SAGETV_BUILDER_VERSION:-unknown}"
+  echo "build_environment=${OPENSAGETV_VIBE_BUILD_ENV_VERSION:-unknown}"
+  echo "ffmpeg_toolchain=${OPENSAGETV_VIBE_FFMPEG_TOOLCHAIN:-unknown}"
   echo "target=$TARGET_ID"
   echo "ffmpeg_tag=$FFMPEG_TAG"
+  echo "ffmpeg_commit=$FFMPEG_COMMIT"
   echo "cc=${CC:-}"
   echo "cxx=${CXX:-}"
   echo

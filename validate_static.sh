@@ -10,31 +10,26 @@ if command -v g++ >/dev/null 2>&1; then
   g++ -std=c++17 -fsyntax-only "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp"
 fi
 
-test -x "$ROOT/build_opensagetv_vibe_builder_image.sh"
-test -x "$ROOT/cleanup_old_opensagetv_vibe_build_images.sh"
-grep -q 'opensagetv-vibe-ffmpeg-mim-builder:9.0.1-v5' \
-  "$ROOT/build_opensagetv_vibe_builder_image.sh"
+test ! -e "$ROOT/build_opensagetv_vibe_builder_image.sh"
+test ! -e "$ROOT/build_opensagetv_vibe_builder_image.bat"
+test ! -e "$ROOT/cleanup_old_opensagetv_vibe_build_images.sh"
+test ! -e "$ROOT/docker/Dockerfile"
+test ! -e "$ROOT/code/docker/unified_entrypoint.sh"
 
-grep -q 'opensagetv-vibe-ffmpeg-mim-builder:9.0.1-v5' "$ROOT/settings.ini"
+grep -q 'opensagetv-vibe-build-env' "$ROOT/code/docker/run_unified_builder.sh"
+grep -q 'opensagetv-vibe-dev.sh' "$ROOT/code/docker/run_unified_builder.sh"
+grep -q 'ffmpeg-linux' "$ROOT/code/docker/run_unified_builder.sh"
+grep -q 'ffmpeg-windows' "$ROOT/code/docker/run_unified_builder.sh"
+grep -q '^FFMPEG_COMMIT=bf1b838f2ab88b4f8fd83443325c782ea0e0f7fa$' "$ROOT/settings.ini"
+! grep -Eq 'SAGETV_BUILDER_(IMAGE|CONTAINER)|opensagetv-vibe-ffmpeg-mim-builder' \
+  "$ROOT/settings.ini" "$ROOT/code/docker/run_unified_builder.sh"
+grep -q 'SAGETV_FFMPEG_COMMIT' "$ROOT/code/docker/build_target_unified.sh"
+grep -q 'build_environment=' "$ROOT/code/docker/build_target_unified.sh"
 
-grep -q '^SAGETV_BUILDER_CONTAINER=opensagetv-vibe-ffmpeg-mim-builder$' "$ROOT/settings.ini"
-grep -q -- '--name "$CONTAINER"' "$ROOT/code/docker/run_unified_builder.sh"
-grep -q '"$IMAGE" "$MODE"' "$ROOT/code/docker/run_unified_builder.sh"
-! grep -q 'build_opensagetv_vibe_builder_image.sh' "$ROOT/code/docker/run_unified_builder.sh"
-if grep -Eq 'sagetv-ffmpeg-build-(linux|windows)' "$ROOT/code/docker/run_unified_builder.sh"; then
-  echo "ERROR: target-specific runtime container names are not allowed" >&2
-  exit 1
-fi
-grep -q 'BTBN_LINUX_IMAGE' "$ROOT/docker/Dockerfile"
-grep -q 'BTBN_WIN64_IMAGE' "$ROOT/docker/Dockerfile"
-grep -q 'linux-x64 windows-x64' <(tr '\n' ' ' < "$ROOT/code/docker/unified_entrypoint.sh") || true
-
-# x86/Win32 must not be an active build target. Legacy cleanup script is excluded
-# because it intentionally removes old Win32 image tags from previous versions.
+# x86/Win32 must not be an active build target.
 for f in \
   "$ROOT/settings.ini" \
-  "$ROOT/docker/Dockerfile" \
-  "$ROOT/code/docker/unified_entrypoint.sh" \
+  "$ROOT/code/docker/run_unified_builder.sh" \
   "$ROOT/code/docker/build_target_unified.sh" \
   "$ROOT/ffmpeg.real.ini"; do
   if grep -Eqi 'windows-x86|windows_x86|base-win32|targets/win32|btbn_win32|BUILD_WINDOWS_X86|BTBN_WIN32' "$f"; then

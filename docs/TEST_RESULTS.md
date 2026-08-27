@@ -1,6 +1,6 @@
 # Test Results — v0.4.5
 
-## Current non-Android validation (2026-08-26)
+## Current non-Android validation (2026-08-27)
 
 - `[PASS]` clean Linux amd64 FFmpeg/MIM build and SHA-256 validation.
 - `[PASS]` clean Windows amd64 FFmpeg/MIM build and SHA-256 validation.
@@ -14,8 +14,8 @@
 - `[PASS]` every emitted test stream contained audio and video, started within
   1.5 seconds of each other, met the minimum video-packet count, and fully
   decoded without error.
-- `[PASS]` first output was 222 ms for join-in-progress and 145–149 ms for the
-  three repeated starts in the final unified run.
+- `[PASS]` first output was 227 ms for join-in-progress and 143-147 ms for the
+  three repeated starts in the final consolidated-image run.
 - `[PASS]` active inputs bypass the reduced probe cache; completed unchanged
   recordings retain the cache optimization.
 - `[PASS]` simulated hardware initialization failure selects `libx264` before
@@ -27,7 +27,11 @@
 - `[PASS]` the final MIM binary embedded in production/debug images exactly
   matches the unified Linux output SHA-256.
 
-The final 2026-08-26 unified `all` command returned `BUILD PASSED`. The
+The final 2026-08-27 unified `all` command returned `BUILD PASSED` from the
+single `opensagetv-vibe-dev` container. The Linux and Windows toolchains were
+private stages in `opensagetv-vibe-build-env:u26-j11`; no separately tagged
+FFmpeg builder image or phase-specific build container was present. Static
+validation, `ffmpeg-info`, and the compatibility launcher also passed. The
 production image clean-appdata test also passed. MIM remains disabled because
 server-only tests cannot validate Android rendering/decoder recovery and no AMD
 or NVIDIA device was available. The sections below retain older findings as
@@ -60,7 +64,8 @@ Live status before v0.4.4 deployment: full QSV playback works and greatly lowers
 - `[PASS]` Closed FFmpeg stdin produces contained/logged `EPIPE` rather than terminating the MIM with `SIGPIPE`.
 - `[PASS]` Docker runtime creation uses `--restart unless-stopped`.
 - `[PASS]` Existing container restart policy can be updated with `enable-crash-restart.sh` without a rebuild.
-- `[PASS]` Builder tag remains `opensagetv-vibe-ffmpeg-mim-builder:9.0.1-v5`.
+- `[PASS]` The then-current standalone builder tag remained stable (retired by
+  the later unified build-environment consolidation).
 - `[PASS]` Linux/Windows/all build wrapper does not implicitly call the builder-image bootstrap when the image is missing.
 
 ## v0.4.2 fixed-push contract regression
@@ -70,14 +75,14 @@ Live status before v0.4.4 deployment: full QSV playback works and greatly lowers
 - `[PASS]` Video still maps to `-c:v h264_qsv` with explicit QSV device initialization.
 - `[PASS]` Matroska output does not receive `-mpegts_flags`, `-muxpreload`, or `-muxdelay`.
 - `[PASS]` Current FFmpeg accepts the resulting Matroska/H.264/MP2-mono output shape in a live encode sanity test.
-- `[PASS]` Builder tag remains `opensagetv-vibe-ffmpeg-mim-builder:9.0.1-v5`.
+- `[PASS]` The then-current standalone builder tag remained stable (historical).
 
 ## v0.4.1 source validation
 
 - `[PASS]` Shell syntax for root build scripts, Docker builder scripts, MIM tests, init tests, and merged Ubuntu 26 runtime scripts.
 - `[PASS]` Python syntax for the FFmpeg `videorateadapt` patcher.
 - `[PASS]` C++17 syntax for the native MIM.
-- `[PASS]` Builder version advanced to `opensagetv-vibe-ffmpeg-mim-builder:9.0.1-v5`.
+- `[PASS]` The then-current standalone builder version advanced (historical).
 - `[PASS]` Linux/Windows x64-only target matrix retained.
 - `[PASS]` Windows packaging still emits `SageTVTranscoder.exe`.
 - `[PASS]` Linux `ffmpeg_init.sh` chmod-first and backup/restore behavior retained.

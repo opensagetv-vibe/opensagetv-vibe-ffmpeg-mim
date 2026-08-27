@@ -13,6 +13,10 @@ scoped patch.
 ./code/docker/run_unified_builder.sh all
 ```
 
+That compatibility launcher delegates to the sibling
+`opensagetv-vibe-build-env` wrapper. It never creates a component-specific
+image or container.
+
 Outputs are written to `output/linux-x64` and `output/windows-x64`. Linux/Unraid release images consume only the Linux directory. Windows artifacts are retained as a separate release package.
 
 MIM is experimental and remains disabled by default in the SageTV runtime.

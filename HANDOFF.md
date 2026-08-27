@@ -3,6 +3,9 @@
 Current state: MIM 0.4.5 and FFmpeg `n9.0.1` build successfully for Linux amd64
 and Windows amd64 in the single `opensagetv-vibe-dev` environment. Generated
 artifacts and checksums live under `output/<target>` and are not committed.
+The Linux/Windows toolchain Docker stages are owned by
+`opensagetv-vibe-build-env`; this repository has no standalone Docker image or
+container lifecycle.
 
 The complete non-Android suite passes. It covers installer backup/rollback,
 argument mapping, `videorateadapt`/`inactivefile`, EOF and signal teardown,

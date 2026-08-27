@@ -1,111 +1,74 @@
-# Unified Docker Builder — v0.4.5
+# Unified Docker Build — v0.4.5
 
-The project uses one reusable Docker image:
+FFmpeg/MIM is built in the one supported development image and reusable
+container owned by the sibling build-environment repository:
 
 ```text
-opensagetv-vibe-ffmpeg-mim-builder:9.0.1-v5
+image:     opensagetv-vibe-build-env:u26-j11
+container: opensagetv-vibe-dev
 ```
 
-It contains two isolated BtbN target environments:
+There is no separate FFmpeg/MIM Dockerfile, builder image, bootstrap cache, or
+runtime build container. The build-environment Dockerfile keeps its Linux and
+Windows cross-toolchains as private stages and loads only its final image.
+
+## First-time image build
+
+From `opensagetv-vibe-build-env`:
+
+```bash
+./opensagetv-vibe-dev.sh image
+./opensagetv-vibe-dev.sh ffmpeg-info
+```
+
+On Windows Docker Desktop:
+
+```powershell
+.\opensagetv-vibe-dev.ps1 image
+.\opensagetv-vibe-dev.ps1 ffmpeg-info
+```
+
+The image contains these isolated target trees:
 
 ```text
 /opt/sagetv/targets/linux64
 /opt/sagetv/targets/win64
 ```
 
-## One runtime build container
+FFmpeg `n9.0.1` is pinned to commit
+`bf1b838f2ab88b4f8fd83443325c782ea0e0f7fa`. The BtbN base and both target
+images are pinned by digest in the build-environment Dockerfile.
 
-Normal project builds use one named container for every mode:
+## Component launchers
 
-```text
-opensagetv-vibe-ffmpeg-mim-builder
-```
-
-The image and container are different Docker objects:
-
-```text
-image:     opensagetv-vibe-ffmpeg-mim-builder:9.0.1-v5
-container: opensagetv-vibe-ffmpeg-mim-builder
-```
-
-For an `all` build, that one container executes both targets sequentially:
-
-```text
-opensagetv-vibe-ffmpeg-mim-builder
-    ├── linux-x64
-    └── windows-x64
-```
-
-No target-specific runtime containers are created. The build container is started with `--rm`, so it is removed automatically at the end of the build.
-
-The image is assembled from BtbN's actual FFmpeg-Builds environments:
-
-```text
-ghcr.io/btbn/ffmpeg-builds/base:latest
-ghcr.io/btbn/ffmpeg-builds/linux64-gpl-9.0:latest
-ghcr.io/btbn/ffmpeg-builds/win64-gpl-9.0:latest
-```
-
-Those BtbN images are referenced as temporary BuildKit stages. The bootstrap script does not intentionally `docker pull` or retain them as normal Docker Desktop image tags. The dedicated BuildKit bootstrap instance/cache is removed after the unified image is loaded unless `--keep-cache` is requested.
-
-## Why x86 was removed
-
-Win32/x86 added a separate compiler/toolchain/dependency environment and substantially increased image complexity and disk usage while modern hardware decode/encode support is primarily useful on 64-bit systems. v0.4.5 continues to support only Linux x64 and Windows x64.
-
-There is no Win32 build stage, no `base-win32` build dependency, no Win32 FFmpeg output, and no Win32 MIM output.
-
-## First-time image build
-
-```bash
-chmod +x *.sh code/docker/*.sh code/mim/tests/*.sh code/tools/*.py
-./build_opensagetv_vibe_builder_image.sh
-```
-
-Force a rebuild after changing the Docker definition:
-
-```bash
-./build_opensagetv_vibe_builder_image.sh --rebuild
-```
-
-## Build Linux only
+The launchers retained in this repository delegate to the sibling unified
+wrapper and reuse `opensagetv-vibe-dev`:
 
 ```bash
 ./build_linux_sagetv_ffmpeg_static.sh
-```
-
-This command **does not build/rebuild the Docker builder image**. It requires the existing `opensagetv-vibe-ffmpeg-mim-builder:9.0.1-v5` image and fails with a clear error if that image is missing. Only `build_opensagetv_vibe_builder_image.sh` changes/creates the builder image.
-
-## Build both supported targets
-
-```bash
+./build_windows_sagetv_ffmpeg_static.sh
 ./build_all_sagetv_ffmpeg_static.sh
 ```
 
-This builds:
+Equivalently, invoke the unified wrapper directly:
+
+```bash
+../opensagetv-vibe-build-env/opensagetv-vibe-dev.sh ffmpeg-linux
+../opensagetv-vibe-build-env/opensagetv-vibe-dev.sh ffmpeg-windows
+```
+
+On Windows, `build_all_sagetv_ffmpeg_static.bat` preserves its historical
+Windows-x64-only behavior but delegates directly to the PowerShell unified
+wrapper; WSL is no longer required for that launcher.
+
+Outputs remain under:
 
 ```text
-linux-x64
-windows-x64
+output/linux-x64/
+output/windows-x64/
 ```
 
-## Build Windows x64 only from Linux/WSL
+## Why x86 was removed
 
-```bash
-./build_windows_sagetv_ffmpeg_static.sh
-```
-
-From Windows Command Prompt/PowerShell, the `.bat` launcher enters WSL and uses the same Docker builder:
-
-```bat
-build_all_sagetv_ffmpeg_static.bat
-```
-
-## Removing images from older versions
-
-After the v0.4.5 project is used with the existing v5 unified image, the bootstrap attempts to remove BtbN/source tags and old SageTV builder tags from previous versions, including legacy Win32 tags. If any remain visible in Docker Desktop, remove them manually with:
-
-```bash
-./cleanup_old_opensagetv_vibe_build_images.sh
-```
-
-That helper intentionally knows the old Win32 image names only so it can delete them.
+Win32/x86 would require another compiler and dependency tree. The supported
+targets remain Linux/amd64 and Windows/amd64 only.

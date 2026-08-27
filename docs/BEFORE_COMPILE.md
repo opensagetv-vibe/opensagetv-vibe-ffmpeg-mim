@@ -3,19 +3,23 @@
 Use this v0.4.5 tree. Do not compile from an older handoff or the standalone
 Ubuntu 26 Docker ZIP.
 
-## 1. Reuse the unified builder image
+## 1. Reuse the unified development image
 
-v0.4.5 does **not** change the builder environment. Reuse the existing builder image:
+Build or refresh the one development image from the sibling build-environment
+repository:
 
 ```bash
-chmod +x *.sh code/docker/*.sh code/mim/tests/*.sh code/tools/*.py
+../opensagetv-vibe-build-env/opensagetv-vibe-dev.sh image
 ```
 
-Expected image:
+Expected Docker objects:
 
 ```text
-opensagetv-vibe-ffmpeg-mim-builder:9.0.1-v5
+opensagetv-vibe-build-env:u26-j11
+opensagetv-vibe-dev
 ```
+
+There is no standalone FFmpeg/MIM builder image.
 
 ## 2. Runtime changes are separate
 
@@ -29,7 +33,9 @@ in this add-on source tree.
 ./build_linux_sagetv_ffmpeg_static.sh
 ```
 
-The command reuses `opensagetv-vibe-ffmpeg-mim-builder:9.0.1-v5`. If the image is missing it now stops with an error instead of rebuilding Docker implicitly.
+The command delegates to `opensagetv-vibe-build-env` and reuses
+`opensagetv-vibe-dev`. If the sibling build environment is missing it fails
+without creating an alternate container.
 
 Expected output:
 

@@ -12,7 +12,7 @@ field diagnostics used a separate Unraid development instance:
 - server directory: `/mnt/user/appdata/sagetv_dev/server`
 - media: `/mnt/user/sagemedia` mounted at `/var/media`
 - runtime base: Ubuntu 26.04 with Java 11
-- builder: `opensagetv-vibe-ffmpeg-mim-builder:9.0.1-v5`
+- development image: `opensagetv-vibe-build-env:u26-j11`
 
 Do not copy credentials, license data, or an existing SageTV database from this
 handoff. Supply those locally during commissioning.
@@ -26,10 +26,10 @@ Docker is the only host build prerequisite.
 ../opensagetv-vibe-build-env/opensagetv-vibe-dev.sh test-mim
 ```
 
-To create the builder when it is not already present:
+To create or refresh the unified image when it is not already present:
 
 ```bash
-./build_opensagetv_vibe_builder_image.sh
+../opensagetv-vibe-build-env/opensagetv-vibe-dev.sh image
 ```
 
 Linux output is written to `output/linux-x64/`. The commissioning set is:

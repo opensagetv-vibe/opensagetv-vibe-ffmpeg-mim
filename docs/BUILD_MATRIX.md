@@ -1,11 +1,11 @@
 # Build Matrix — v0.4.5
 
-| Launcher | Linux x64 | Windows x64 | Builder image |
+| Launcher | Linux x64 | Windows x64 | Development image |
 |---|---:|---:|---|
-| `build_linux_sagetv_ffmpeg_static.sh` | Yes | No | `opensagetv-vibe-ffmpeg-mim-builder:9.0.1-v5` |
+| `build_linux_sagetv_ffmpeg_static.sh` | Yes | No | `opensagetv-vibe-build-env:u26-j11` |
 | `build_windows_sagetv_ffmpeg_static.sh` | No | Yes | same image |
 | `build_all_sagetv_ffmpeg_static.sh` | Yes | Yes | same image |
-| `build_all_sagetv_ffmpeg_static.bat` | No | Yes | same image via WSL/Docker |
+| `build_all_sagetv_ffmpeg_static.bat` | No | Yes | same image via PowerShell/Docker |
 
 Win32/x86 is intentionally removed in v0.3.9. The project no longer builds, configures, tests, or packages a 32-bit target.
 
@@ -30,6 +30,7 @@ output/
     └── SHA256SUMS.txt
 ```
 
-## Runtime build container
+## Reusable development container
 
-All target selections use one named container: `opensagetv-vibe-ffmpeg-mim-builder`. An `all` build executes both targets sequentially inside that one container.
+All target selections use `opensagetv-vibe-dev`. An `all` component build
+executes both targets sequentially in that existing container.

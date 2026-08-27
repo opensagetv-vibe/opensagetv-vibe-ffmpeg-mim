@@ -2,49 +2,31 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-MODE="${1:?Usage: $0 linux|windows|all|target [target-id]}"
+MODE="${1:?Usage: $0 linux|windows|all|target TARGET|info}"
 shift || true
+BUILD_ENV="${OPENSAGETV_VIBE_BUILD_ENV_DIR:-$ROOT/../opensagetv-vibe-build-env}"
+DEV="$BUILD_ENV/opensagetv-vibe-dev.sh"
 
-# shellcheck disable=SC1091
-source "$ROOT/settings.ini"
-
-IMAGE="${SAGETV_BUILDER_IMAGE:-opensagetv-vibe-ffmpeg-mim-builder:9.0.1-v5}"
-CONTAINER="${SAGETV_BUILDER_CONTAINER:-opensagetv-vibe-ffmpeg-mim-builder}"
-
-command -v docker >/dev/null 2>&1 || { echo "ERROR: Docker is required." >&2; exit 1; }
-docker info >/dev/null 2>&1 || { echo "ERROR: Docker daemon is not reachable." >&2; exit 1; }
-
-if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-  echo "ERROR: required builder image is missing: $IMAGE" >&2
-  echo "Build it intentionally with: ./build_opensagetv_vibe_builder_image.sh" >&2
+[[ -x "$DEV" ]] || {
+  echo "ERROR: unified build wrapper not found: $DEV" >&2
+  echo "Check out opensagetv-vibe-build-env beside this repository." >&2
   exit 1
-fi
+}
 
-mkdir -p "$ROOT/output"
-
-# There is intentionally ONE runtime container for every build mode.  The
-# 'all' command builds Linux x64 and Windows x64 sequentially inside this one
-# container.  Linux-only and Windows-only use the same container name.
-if docker container inspect "$CONTAINER" >/dev/null 2>&1; then
-  running="$(docker container inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null || echo false)"
-  if [[ "$running" == "true" ]]; then
-    echo "ERROR: build container '$CONTAINER' is already running." >&2
-    echo "Wait for the current build to finish, or stop it with:" >&2
-    echo "  docker stop $CONTAINER" >&2
-    exit 1
-  fi
-  # Remove a stale exited container left by an interrupted/older build.
-  docker container rm -f "$CONTAINER" >/dev/null 2>&1 || true
-fi
-
-echo "[builder] image     : $IMAGE"
-echo "[builder] container : $CONTAINER"
-echo "[builder] mode      : $MODE"
-
-exec docker run --rm -i \
-  --name "$CONTAINER" \
-  -e "HOST_UID=$(id -u)" \
-  -e "HOST_GID=$(id -g)" \
-  -v "$ROOT:/project" \
-  -w /project \
-  "$IMAGE" "$MODE" "$@"
+case "$MODE" in
+  linux) exec "$DEV" ffmpeg-linux "$@" ;;
+  windows) exec "$DEV" ffmpeg-windows "$@" ;;
+  info) exec "$DEV" ffmpeg-info "$@" ;;
+  all)
+    "$DEV" ffmpeg-linux "$@"
+    exec "$DEV" ffmpeg-windows "$@"
+    ;;
+  target)
+    case "${1:-}" in
+      linux-x64) exec "$DEV" ffmpeg-linux ;;
+      windows-x64) exec "$DEV" ffmpeg-windows ;;
+      *) echo "ERROR: target must be linux-x64 or windows-x64" >&2; exit 2 ;;
+    esac
+    ;;
+  *) echo "ERROR: unsupported mode: $MODE" >&2; exit 2 ;;
+esac
