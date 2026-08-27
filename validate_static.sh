@@ -10,9 +10,9 @@ if command -v g++ >/dev/null 2>&1; then
   g++ -std=c++17 -fsyntax-only "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp"
 fi
 
-grep -q 'sagetv-ffmpeg-mim-builder:9.0.1-v5' "$ROOT/settings.ini"
+grep -q 'opensagetv-vibe-ffmpeg-mim-builder:9.0.1-v5' "$ROOT/settings.ini"
 
-grep -q '^SAGETV_BUILDER_CONTAINER=sagetv-ffmpeg-mim-builder$' "$ROOT/settings.ini"
+grep -q '^SAGETV_BUILDER_CONTAINER=opensagetv-vibe-ffmpeg-mim-builder$' "$ROOT/settings.ini"
 grep -q -- '--name "$CONTAINER"' "$ROOT/code/docker/run_unified_builder.sh"
 grep -q '"$IMAGE" "$MODE"' "$ROOT/code/docker/run_unified_builder.sh"
 ! grep -q 'build_sagetv_builder_image.sh' "$ROOT/code/docker/run_unified_builder.sh"
@@ -56,7 +56,7 @@ grep -q 'cp "$PROJECT/diagnose_sagetv_abort.sh" "$OUT/diagnose_sagetv_abort.sh"'
 grep -q 'MIM_NAME=SageTVTranscoder.exe' "$ROOT/code/docker/build_target_unified.sh"
 
 
-# Runtime Docker checks belong to the separate opensagetv-container project.
+# Runtime Docker checks belong to the separate opensagetv-vibe-container project.
 # This repository validates only FFmpeg/MIM source, configuration, and output.
 
 # v0.4.5 keeps containment and closes MiniPlayer switch teardown paths.

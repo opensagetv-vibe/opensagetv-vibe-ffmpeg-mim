@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Renamed the project, shared build-container references, standalone builder
+  image, named container, and BuildKit cache to the `opensagetv-vibe-*`
+  namespace without changing the FFmpeg/MIM binary ABI.
 - Advanced the wrapper and FFmpeg build suffix to 0.4.5.
 - Fixed the FFmpeg option/control regression and retained deterministic
   `videorateadapt`, `inactivefile`, EOF, signal, and descendant-process teardown

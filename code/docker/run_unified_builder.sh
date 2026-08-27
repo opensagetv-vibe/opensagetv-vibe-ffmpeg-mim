@@ -8,8 +8,8 @@ shift || true
 # shellcheck disable=SC1091
 source "$ROOT/settings.ini"
 
-IMAGE="${SAGETV_BUILDER_IMAGE:-sagetv-ffmpeg-mim-builder:9.0.1-v5}"
-CONTAINER="${SAGETV_BUILDER_CONTAINER:-sagetv-ffmpeg-mim-builder}"
+IMAGE="${SAGETV_BUILDER_IMAGE:-opensagetv-vibe-ffmpeg-mim-builder:9.0.1-v5}"
+CONTAINER="${SAGETV_BUILDER_CONTAINER:-opensagetv-vibe-ffmpeg-mim-builder}"
 
 command -v docker >/dev/null 2>&1 || { echo "ERROR: Docker is required." >&2; exit 1; }
 docker info >/dev/null 2>&1 || { echo "ERROR: Docker daemon is not reachable." >&2; exit 1; }

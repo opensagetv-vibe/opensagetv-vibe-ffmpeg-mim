@@ -1,4 +1,4 @@
-# OpenSageTV FFmpeg/MIM
+# OpenSageTV Vibe FFmpeg/MIM
 
 Modern FFmpeg and SageTV Media Interface Module add-on for Linux/amd64 and
 Windows/amd64. The add-on will be included in the runtime but remain disabled
@@ -25,7 +25,7 @@ NVIDIA hardware tests.
 Run only the complete non-Android MIM suite through the shared build container:
 
 ```bash
-../opensagetv-build-env/opensagetv-dev.sh test-mim
+../opensagetv-vibe-build-env/opensagetv-vibe-dev.sh test-mim
 ```
 
 The suite writes `output/test-results/non-android-suite.log` and returns

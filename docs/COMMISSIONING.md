@@ -3,7 +3,7 @@
 ## Authoritative field state
 
 This package captures the source and deployment state through 2026-08-26.
-The current supported build uses the shared `opensagetv-dev` container. Earlier
+The current supported build uses the shared `opensagetv-vibe-dev` container. Earlier
 field diagnostics used a separate Unraid development instance:
 
 - container: `opensagetv-modern-dev`
@@ -12,7 +12,7 @@ field diagnostics used a separate Unraid development instance:
 - server directory: `/mnt/user/appdata/sagetv_dev/server`
 - media: `/mnt/user/sagemedia` mounted at `/var/media`
 - runtime base: Ubuntu 26.04 with Java 11
-- builder: `sagetv-ffmpeg-mim-builder:9.0.1-v5`
+- builder: `opensagetv-vibe-ffmpeg-mim-builder:9.0.1-v5`
 
 Do not copy credentials, license data, or an existing SageTV database from this
 handoff. Supply those locally during commissioning.
@@ -22,8 +22,8 @@ handoff. Supply those locally during commissioning.
 Docker is the only host build prerequisite.
 
 ```bash
-../opensagetv-build-env/opensagetv-dev.sh ffmpeg-linux
-../opensagetv-build-env/opensagetv-dev.sh test-mim
+../opensagetv-vibe-build-env/opensagetv-vibe-dev.sh ffmpeg-linux
+../opensagetv-vibe-build-env/opensagetv-vibe-dev.sh test-mim
 ```
 
 To create the builder when it is not already present:

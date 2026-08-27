@@ -3,7 +3,7 @@
 The project uses one reusable Docker image:
 
 ```text
-sagetv-ffmpeg-mim-builder:9.0.1-v5
+opensagetv-vibe-ffmpeg-mim-builder:9.0.1-v5
 ```
 
 It contains two isolated BtbN target environments:
@@ -18,20 +18,20 @@ It contains two isolated BtbN target environments:
 Normal project builds use one named container for every mode:
 
 ```text
-sagetv-ffmpeg-mim-builder
+opensagetv-vibe-ffmpeg-mim-builder
 ```
 
 The image and container are different Docker objects:
 
 ```text
-image:     sagetv-ffmpeg-mim-builder:9.0.1-v5
-container: sagetv-ffmpeg-mim-builder
+image:     opensagetv-vibe-ffmpeg-mim-builder:9.0.1-v5
+container: opensagetv-vibe-ffmpeg-mim-builder
 ```
 
 For an `all` build, that one container executes both targets sequentially:
 
 ```text
-sagetv-ffmpeg-mim-builder
+opensagetv-vibe-ffmpeg-mim-builder
     ├── linux-x64
     └── windows-x64
 ```
@@ -73,7 +73,7 @@ Force a rebuild after changing the Docker definition:
 ./build_linux_sagetv_ffmpeg_static.sh
 ```
 
-This command **does not build/rebuild the Docker builder image**. It requires the existing `sagetv-ffmpeg-mim-builder:9.0.1-v5` image and fails with a clear error if that image is missing. Only `build_sagetv_builder_image.sh` changes/creates the builder image.
+This command **does not build/rebuild the Docker builder image**. It requires the existing `opensagetv-vibe-ffmpeg-mim-builder:9.0.1-v5` image and fails with a clear error if that image is missing. Only `build_sagetv_builder_image.sh` changes/creates the builder image.
 
 ## Build both supported targets
 

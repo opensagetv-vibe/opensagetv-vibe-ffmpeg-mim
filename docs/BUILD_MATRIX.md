@@ -2,7 +2,7 @@
 
 | Launcher | Linux x64 | Windows x64 | Builder image |
 |---|---:|---:|---|
-| `build_linux_sagetv_ffmpeg_static.sh` | Yes | No | `sagetv-ffmpeg-mim-builder:9.0.1-v5` |
+| `build_linux_sagetv_ffmpeg_static.sh` | Yes | No | `opensagetv-vibe-ffmpeg-mim-builder:9.0.1-v5` |
 | `build_windows_sagetv_ffmpeg_static.sh` | No | Yes | same image |
 | `build_all_sagetv_ffmpeg_static.sh` | Yes | Yes | same image |
 | `build_all_sagetv_ffmpeg_static.bat` | No | Yes | same image via WSL/Docker |
@@ -32,4 +32,4 @@ output/
 
 ## Runtime build container
 
-All target selections use one named container: `sagetv-ffmpeg-mim-builder`. An `all` build executes both targets sequentially inside that one container.
+All target selections use one named container: `opensagetv-vibe-ffmpeg-mim-builder`. An `all` build executes both targets sequentially inside that one container.

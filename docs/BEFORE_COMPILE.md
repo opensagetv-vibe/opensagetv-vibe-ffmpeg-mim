@@ -14,13 +14,13 @@ chmod +x *.sh code/docker/*.sh code/mim/tests/*.sh code/tools/*.py
 Expected image:
 
 ```text
-sagetv-ffmpeg-mim-builder:9.0.1-v5
+opensagetv-vibe-ffmpeg-mim-builder:9.0.1-v5
 ```
 
 ## 2. Runtime changes are separate
 
 Runtime image, supervision, and Unraid restart-policy changes belong in the
-sibling `opensagetv-container` repository and are intentionally not duplicated
+sibling `opensagetv-vibe-container` repository and are intentionally not duplicated
 in this add-on source tree.
 
 ## 3. Build Linux first
@@ -29,7 +29,7 @@ in this add-on source tree.
 ./build_linux_sagetv_ffmpeg_static.sh
 ```
 
-The command reuses `sagetv-ffmpeg-mim-builder:9.0.1-v5`. If the image is missing it now stops with an error instead of rebuilding Docker implicitly.
+The command reuses `opensagetv-vibe-ffmpeg-mim-builder:9.0.1-v5`. If the image is missing it now stops with an error instead of rebuilding Docker implicitly.
 
 Expected output:
 

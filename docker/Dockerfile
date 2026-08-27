@@ -52,8 +52,8 @@ RUN chmod +x /opt/sagetv/bin/unified_entrypoint.sh; \
     test -x /opt/sagetv/targets/linux64/ct-ng/bin/x86_64-linux-gnu-gcc || true; \
     test -x /opt/sagetv/targets/win64/ct-ng/bin/x86_64-w64-mingw32-gcc || true
 
-LABEL org.opencontainers.image.title="SageTV FFmpeg MIM Builder" \
-      org.opencontainers.image.description="One BtbN-based builder image for SageTV Linux x64 and Windows x64" \
+LABEL org.opencontainers.image.title="OpenSageTV Vibe FFmpeg/MIM Builder" \
+      org.opencontainers.image.description="One BtbN-based builder image for OpenSageTV Vibe Linux x64 and Windows x64" \
       org.opencontainers.image.version="${BUILDER_VERSION}"
 
 ENV SAGETV_BUILDER_VERSION=${BUILDER_VERSION} \

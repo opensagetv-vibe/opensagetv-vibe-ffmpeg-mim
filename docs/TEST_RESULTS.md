@@ -60,7 +60,7 @@ Live status before v0.4.4 deployment: full QSV playback works and greatly lowers
 - `[PASS]` Closed FFmpeg stdin produces contained/logged `EPIPE` rather than terminating the MIM with `SIGPIPE`.
 - `[PASS]` Docker runtime creation uses `--restart unless-stopped`.
 - `[PASS]` Existing container restart policy can be updated with `enable-crash-restart.sh` without a rebuild.
-- `[PASS]` Builder tag remains `sagetv-ffmpeg-mim-builder:9.0.1-v5`.
+- `[PASS]` Builder tag remains `opensagetv-vibe-ffmpeg-mim-builder:9.0.1-v5`.
 - `[PASS]` Linux/Windows/all build wrapper does not implicitly call the builder-image bootstrap when the image is missing.
 
 ## v0.4.2 fixed-push contract regression
@@ -70,14 +70,14 @@ Live status before v0.4.4 deployment: full QSV playback works and greatly lowers
 - `[PASS]` Video still maps to `-c:v h264_qsv` with explicit QSV device initialization.
 - `[PASS]` Matroska output does not receive `-mpegts_flags`, `-muxpreload`, or `-muxdelay`.
 - `[PASS]` Current FFmpeg accepts the resulting Matroska/H.264/MP2-mono output shape in a live encode sanity test.
-- `[PASS]` Builder tag remains `sagetv-ffmpeg-mim-builder:9.0.1-v5`.
+- `[PASS]` Builder tag remains `opensagetv-vibe-ffmpeg-mim-builder:9.0.1-v5`.
 
 ## v0.4.1 source validation
 
 - `[PASS]` Shell syntax for root build scripts, Docker builder scripts, MIM tests, init tests, and merged Ubuntu 26 runtime scripts.
 - `[PASS]` Python syntax for the FFmpeg `videorateadapt` patcher.
 - `[PASS]` C++17 syntax for the native MIM.
-- `[PASS]` Builder version advanced to `sagetv-ffmpeg-mim-builder:9.0.1-v5`.
+- `[PASS]` Builder version advanced to `opensagetv-vibe-ffmpeg-mim-builder:9.0.1-v5`.
 - `[PASS]` Linux/Windows x64-only target matrix retained.
 - `[PASS]` Windows packaging still emits `SageTVTranscoder.exe`.
 - `[PASS]` Linux `ffmpeg_init.sh` chmod-first and backup/restore behavior retained.

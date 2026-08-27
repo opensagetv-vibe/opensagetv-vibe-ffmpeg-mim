@@ -1,7 +1,7 @@
 # Handoff
 
 Current state: MIM 0.4.5 and FFmpeg `n9.0.1` build successfully for Linux amd64
-and Windows amd64 in the single `opensagetv-dev` environment. Generated
+and Windows amd64 in the single `opensagetv-vibe-dev` environment. Generated
 artifacts and checksums live under `output/<target>` and are not committed.
 
 The complete non-Android suite passes. It covers installer backup/rollback,
