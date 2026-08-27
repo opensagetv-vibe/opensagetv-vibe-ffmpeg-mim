@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Forced INI build settings to LF in Git checkouts. This prevents a Windows
+  fresh clone from appending a carriage return to `FFMPEG_TAG` and
+  `FFMPEG_COMMIT` when `settings.ini` is sourced inside the Linux container.
 - Removed the standalone FFmpeg/MIM Dockerfile, image bootstrap, cleanup
   helper, and temporary build-container lifecycle. Component launchers now
   delegate to the sibling `opensagetv-vibe-build-env` wrapper and reuse

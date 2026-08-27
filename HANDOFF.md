@@ -7,6 +7,10 @@ The Linux/Windows toolchain Docker stages are owned by
 `opensagetv-vibe-build-env`; this repository has no standalone Docker image or
 container lifecycle.
 
+`settings.ini` is explicitly checked out with LF endings. Keep that
+`.gitattributes` rule: Windows CRLF conversion changes sourced shell values and
+causes the unified toolchain pin check to fail during a fresh-clone build.
+
 The complete non-Android suite passes. It covers installer backup/rollback,
 argument mapping, `videorateadapt`/`inactivefile`, EOF and signal teardown,
 failure containment, completed and growing MPEG-TS, joining a partially written
