@@ -1,4 +1,4 @@
-# Unified Docker Build — v0.4.5
+# Unified Docker Build — v0.4.7
 
 FFmpeg/MIM is built in the one supported development image and reusable
 container owned by the sibling build-environment repository:

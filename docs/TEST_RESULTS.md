@@ -1,6 +1,15 @@
-# Test Results — v0.4.5
+# Test Results — v0.4.7
 
-## Current non-Android validation (2026-08-27)
+## Current non-Android and physical validation (2026-08-30)
+
+- `[PASS]` clean 0.4.7 Linux and Windows amd64 builds in unified image
+  `u26-j11-release-v5`; the subsequently refreshed v6 image retained the exact
+  same pinned FFmpeg toolchain.
+- `[PASS]` complete 0.4.7 non-Android install/media gate on
+  `u26-j11-release-v6`: installer backup/rollback, mapping/control/crash
+  containment, completed A/V, growing join-in-progress, three repeated
+  switches, full decode, and no orphan jobs. First output was 1610 ms for the
+  partial join and 175-177 ms for complete starts.
 
 - `[PASS]` clean Linux amd64 FFmpeg/MIM build and SHA-256 validation.
 - `[PASS]` clean Windows amd64 FFmpeg/MIM build and SHA-256 validation.
@@ -20,12 +29,30 @@
   recordings retain the cache optimization.
 - `[PASS]` simulated hardware initialization failure selects `libx264` before
   the stream starts.
-- `[PASS]` Intel QSV and Intel VAAPI real one-frame preflight and complete
-  audio/video transcodes on Unraid hardware.
+- `[PASS]` Intel VAAPI real one-frame preflight and complete audio/video
+  transcodes on Unraid hardware.
 - `[PASS]` VAAPI software-decode/upload/encode and full hardware-decode paths
   on Unraid hardware.
 - `[PASS]` the final MIM binary embedded in production/debug images exactly
   matches the unified Linux output SHA-256.
+- `[PASS]` Legacy Exo hardware/fallback and Media3
+  hardware/software/fallback Fixed playback with Intel VAAPI, including
+  completed controls, captions, and four exact live channel changes.
+- `[PASS]` final exact 0.4.6 Media3 hardware rerun: prerecorded controls and
+  captions plus four live 2.1/5.1 changes; status reported fresh matching
+  `vaapi`/`h264_vaapi` jobs, stopped state, and `activeJobs=[]`. Evidence:
+  Android artifact
+  `artifacts/firetv/fixed-mim-20260829_234208/FIXED_MIM_MATRIX.json`.
+- `[PASS]` deliberately unavailable render device selected and reported
+  software/libx264; Media3 completed and live gates passed before exact config
+  restoration and VAAPI re-verification.
+- `[FAIL]` IJK failed the fourth live transition in two independent runs.
+- `[FAIL]` legacy Exo forced Android software decode failed prerecorded
+  pause/play recovery; its live case passed.
+- `[SKIPPED]` AMD VAAPI and NVIDIA NVENC physical commissioning; no matching
+  hardware was available.
+- `[FAIL]` Intel QSV stress selection is not the default because direct runs
+  reproducibly exited with return code 139; Intel VAAPI is the stable path.
 
 The final 2026-08-27 unified `all` command returned `BUILD PASSED` from the
 single `opensagetv-vibe-dev` container. The Linux and Windows toolchains were
@@ -35,7 +62,7 @@ validation, `ffmpeg-info`, and the compatibility launcher also passed. The
 production image clean-appdata test also passed. MIM remains disabled because
 server-only tests cannot validate Android rendering/decoder recovery and no AMD
 or NVIDIA device was available. The sections below retain older findings as
-historical regression context; they are not the current 0.4.5 result.
+historical regression context; they are not the current 0.4.6 result.
 
 ## Merge revalidation (2026-08-24)
 

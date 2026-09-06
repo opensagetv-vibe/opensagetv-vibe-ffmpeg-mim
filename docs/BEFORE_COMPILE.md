@@ -1,6 +1,6 @@
-# Before Compile — v0.4.5
+# Before Compile — v0.4.7
 
-Use this v0.4.5 tree. Do not compile from an older handoff or the standalone
+Use this v0.4.7 tree. Do not compile from an older handoff or the standalone
 Ubuntu 26 Docker ZIP.
 
 ## 1. Reuse the unified development image
@@ -102,7 +102,7 @@ Do not change Ubuntu, Java, SageTV, `/dev/dri`, or the Intel driver again. That 
 
 ## What this build is validating
 
-v0.4.5 adds active-input probe safety, runtime GPU preflight/fallback, corrected
+v0.4.7 retains active-input probe safety, runtime GPU preflight/fallback, corrected
 backend-native filters, and real media/lifecycle tests. After deployment,
 repeat recording-to-recording and live-channel switches and confirm the old
 `ffmpeg.real` is terminated before the next MIM invocation.

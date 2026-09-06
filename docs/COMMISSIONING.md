@@ -2,14 +2,14 @@
 
 ## Authoritative field state
 
-This package captures the source and deployment state through 2026-08-26.
-The current supported build uses the shared `opensagetv-vibe-dev` container. Earlier
-field diagnostics used a separate Unraid development instance:
+This package captures the source and deployment state through 2026-08-29.
+The current supported build uses the shared `opensagetv-vibe-dev` container.
+The commissioned isolated Unraid development instance is:
 
-- container: `opensagetv-modern-dev`
-- SageTV address: `192.168.10.176`
-- persistent root: `/mnt/user/appdata/sagetv_dev`
-- server directory: `/mnt/user/appdata/sagetv_dev/server`
+- container: `sagetv-vibe-server-u26-gpu-j11`
+- SageTV address: `192.168.10.232`
+- persistent root: `/mnt/user/appdata/sagetv-vibe-server-u26-gpu-j11`
+- server directory: `/mnt/user/appdata/sagetv-vibe-server-u26-gpu-j11/server`
 - media: `/mnt/user/sagemedia` mounted at `/var/media`
 - runtime base: Ubuntu 26.04 with Java 11
 - development image: `opensagetv-vibe-build-env:u26-j11`
@@ -63,45 +63,43 @@ the `ffmpeg` executable used by SageTV.
 - Known `.ts` active files are passed to FFmpeg with the MPEG-TS demuxer forced.
 - The readiness gate scans up to 5 MB already present and requires codec setup
   plus a picture/keyframe before FFmpeg launches.
-- Global `hardware_decode=true` is retained for completed files.
-- Active-file hardware decode is disabled.
-- Active-file hardware encode is disabled; live jobs use `libx264`.
-- The MiniClient network-encoder playback delay is 1500 ms in its client
-  properties. The attempted 250 ms value caused inconsistent audio-only starts
-  and must not be reused.
+- Linux automatic backend order is `vaapi,qsv,nvenc,software`.
+- Global and active-file hardware input decode are disabled so A/53 caption
+  side data survives software MPEG-2 decode.
+- Intel live and completed jobs hardware-encode with `h264_vaapi`; the filter
+  path uploads NV12 frames explicitly.
+- Output uses `-a53cc 1`, zero B-frames for live safety, prompt MPEG-TS muxing,
+  and header/discontinuity resend.
+- Completed MPEG-TS seeks preserve SageTV's exact requested time. The old
+  bounded input/output-preroll workaround is opt-in only because applying it
+  globally shifted SageTV timeline and A/53 caption presentation by about five
+  seconds on the commissioned software-decode/VAAPI-encode path.
+- Completed-file warm probe caching uses at least 512 KiB, 500 ms, and 1024
+  packets. Do not restore the old 64 KiB/100 ms/128 packet shortcut: physical
+  A/53 testing proved it accumulated about five seconds of caption drift.
+- Intel QSV remains selectable but is not the default because the final
+  FFmpeg 9 seek/live stress stream reproducibly exited with return code 139.
 
 ## Remaining commissioning boundary
 
-The server-side causes reproduced from earlier black-video/audio-only starts
-have been corrected in 0.4.5: active inputs no longer use a reduced cached
-probe, hardware encoders undergo a bounded real encode preflight, and each GPU
-path uses compatible frame/upload/filter chains. Real generated growing and
-partially written streams now pass repeated audio/video integrity tests.
+The Android MCP harness is integrated. The exact 0.4.7 hardware-only matrix
+passes legacy Exo, Media3, IJK, GSY Auto, GSY Media3, GSY legacy Exo, and the
+bounded GSY System safe delegate for completed controls and real 2.1/5.1 live
+changes on Amazon AFTMM/API 25. Fresh-job, expected-input, Intel
+VAAPI/`h264_vaapi`, stopped-state, and zero-orphan checks all pass. Older
+software/fallback results remain historical evidence but are outside the
+current hardware-only commissioning scope.
 
-Live Android MiniClient playback is still not fully commissioned because the
-client is not currently part of the automated harness. Older evidence retained
-for comparison was:
-
-- source MPEG-2 video and audio are detected correctly;
-- the strengthened readiness gate typically passes in 13-250 ms;
-- forcing MPEG-TS does not eliminate the failure;
-- QSV live encode showed repeated VA-API initialization;
-- switching live encode to `libx264` did not eliminate every missing-video case
-  and consumed about 166% CPU on one 59.94 fps stream;
-- preserving the original MPEG-4 Part 2 request produced neither audio nor video
-  and was rolled back both in deployment and source.
-
-Do not enable MIM by default until multiple real Android sessions, channels,
-channel changes, join-in-progress playback, and repeated starts all produce
-continuous audio and video. Also complete physical AMD VAAPI and NVIDIA NVENC
-tests; their option/filter construction is covered without hardware.
+Do not enable MIM by default. Physical AMD VAAPI and NVIDIA NVENC tests remain
+SKIPPED without matching hardware, and repeated final-release seek/live soak
+still remains before promotion.
 
 ## Recommended next diagnostic
 
-Bring the Android MiniClient MCP/automation harness into the commissioning
-pipeline. Capture the exact Matroska bytes and client logs for any failed
-session, compare first audio/video packets and keyframe timestamps, and verify
-the client recovers without restart after a deliberately failed stream.
+Run repeated exact-release FF/REW/jump and 2.1/5.1 channel-change soak while
+retaining the generated-clock/row-14 screenshot gate. Commission AMD and
+NVIDIA only on matching physical hardware; do not infer them from encoder
+listings or Intel results.
 
 ## Verification after deployment
 
@@ -113,5 +111,6 @@ tail -f ./ffmpeg.real.log
 ```
 
 Verify recorded playback first, then live 29.97 fps, live 59.94 fps, rapid
-channel changes, and join-in-progress playback. Restart the MiniClient after a
-failed stream because its decoder can remain stuck.
+channel changes, and join-in-progress playback. Query `./ffmpeg --mim-status`
+during each job and require the expected backend, encoder, input, freshness,
+hardware-encode state, and post-stop cleanup.

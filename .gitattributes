@@ -1,4 +1,6 @@
 *.sh text eol=lf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
 *.ini text eol=lf
 Dockerfile text eol=lf
 *.cpp text eol=lf

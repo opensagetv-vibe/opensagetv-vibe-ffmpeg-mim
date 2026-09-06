@@ -1,4 +1,4 @@
-# Build Matrix — v0.4.5
+# Build Matrix — v0.4.7
 
 | Launcher | Linux x64 | Windows x64 | Development image |
 |---|---:|---:|---|

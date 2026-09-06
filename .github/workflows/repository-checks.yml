@@ -1,0 +1,21 @@
+name: Repository checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source-contracts:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate source and workflow contracts
+        run: ./validate_static.sh
+      - name: Run MIM argument and containment tests
+        run: ./code/mim/tests/run_mim_tests.sh

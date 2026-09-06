@@ -4,3 +4,7 @@
 /code/tools/__pycache__/
 *.tar
 *.zip
+/artifacts/*
+!/artifacts/downloads/
+/artifacts/downloads/*
+!/artifacts/downloads/.gitkeep
