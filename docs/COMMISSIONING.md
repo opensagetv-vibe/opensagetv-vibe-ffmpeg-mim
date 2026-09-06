@@ -2,12 +2,12 @@
 
 ## Authoritative field state
 
-This package captures the source and deployment state through 2026-08-29.
+This package captures the source and deployment state through 2026-09-05.
 The current supported build uses the shared `opensagetv-vibe-dev` container.
 The commissioned isolated Unraid development instance is:
 
 - container: `sagetv-vibe-server-u26-gpu-j11`
-- SageTV address: `192.168.10.232`
+- SageTV address: `192.0.2.10` (documentation example; replace locally)
 - persistent root: `/mnt/user/appdata/sagetv-vibe-server-u26-gpu-j11`
 - server directory: `/mnt/user/appdata/sagetv-vibe-server-u26-gpu-j11/server`
 - media: `/mnt/user/sagemedia` mounted at `/var/media`
