@@ -59,17 +59,21 @@ grep -q 'MIM_NAME=SageTVTranscoder.exe' "$ROOT/code/docker/build_target_unified.
 # Runtime Docker checks belong to the separate opensagetv-vibe-container project.
 # This repository validates only FFmpeg/MIM source, configuration, and output.
 
-# v0.4.5 keeps containment and closes MiniPlayer switch teardown paths.
-grep -q 'MIM_VERSION = "0.4.5"' "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp"
+# v0.4.8 keeps containment and adds an explicit DVD VM stream-transform contract.
+grep -q 'MIM_VERSION = "0.4.8"' "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp"
+grep -q -- '--mim-capabilities' "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp"
+grep -q -- '-sagetvdiscstream' "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp"
 grep -q 'qsv:hw,child_device=' "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp"
 grep -q 'hardware_encode_preflight' "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp"
 grep -q '^preflight_hardware_encode=true$' "$ROOT/ffmpeg.real.ini"
-grep -q 'probe-cache BYPASS active input=' "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp"
+grep -q 'probe-cache BYPASS active probe_bytes=' "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp"
 grep -q 'yadif_cuda=deint=interlaced' "$ROOT/ffmpeg.real.ini"
 grep -q 'format=nv12,hwupload' "$ROOT/ffmpeg.real.ini"
 grep -q 'preserve_sagetv_output_contract' "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp"
 grep -q '^preserve_sagetv_output_contract=true$' "$ROOT/ffmpeg.real.ini"
 grep -q 'const bool hardware_decode=' "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp"
+grep -q '^caption_software_decode=true$' "$ROOT/ffmpeg.real.ini"
+grep -q 'force_caption_software_decode' "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp"
 
 grep -q '^isolate_child_process=true$' "$ROOT/ffmpeg.real.ini"
 grep -q '^terminate_grace_ms=2000$' "$ROOT/ffmpeg.real.ini"
@@ -92,4 +96,4 @@ grep -q 'log_name="./ffmpeg.real.log"' "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp"
 grep -q 'remove_opt_value(a,{"-vsync","-fps_mode"})' "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp"
 grep -q "does not contain the SageTV -sagetvratectrl patch marker" "$ROOT/code/docker/build_target_unified.sh"
 
-echo '[PASS] v0.4.5 FFmpeg/MIM static validation'
+echo '[PASS] v0.4.8 FFmpeg/MIM static validation'

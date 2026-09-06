@@ -42,7 +42,7 @@ static_assert(sizeof(void*) == 8, "SageTV FFmpeg MIM supports Windows x64 only."
 
 namespace fs = std::filesystem;
 
-static constexpr const char* MIM_VERSION = "0.4.5";
+static constexpr const char* MIM_VERSION = "0.4.8";
 
 static std::string trim(std::string s) {
     auto is_ws = [](unsigned char c){ return std::isspace(c) != 0; };
@@ -99,6 +99,10 @@ public:
     std::string get(const std::string& sec, const std::string& key, const std::string& def="") const {
         auto si=data_.find(lower(sec)); if (si==data_.end()) return def;
         auto ki=si->second.find(lower(key)); return ki==si->second.end()?def:ki->second;
+    }
+    bool has(const std::string& sec, const std::string& key) const {
+        auto si=data_.find(lower(sec));
+        return si!=data_.end() && si->second.find(lower(key))!=si->second.end();
     }
     bool get_bool(const std::string& s, const std::string& k, bool d=false) const { return parse_bool(get(s,k,d?"true":"false"), d); }
     long long get_ll(const std::string& s, const std::string& k, long long d=0) const { return parse_ll(get(s,k,std::to_string(d)), d); }
@@ -168,6 +172,130 @@ static std::string display_quote(const std::string& s) {
 
 static std::string join_display(const fs::path& exe, const std::vector<std::string>& args) {
     std::ostringstream o; o << display_quote(exe.string()); for (const auto& a:args) o << ' ' << display_quote(a); return o.str();
+}
+
+static std::string json_escape(const std::string& value) {
+    std::ostringstream out;
+    for (unsigned char c : value) {
+        switch (c) {
+            case '"': out << "\\\""; break;
+            case '\\': out << "\\\\"; break;
+            case '\b': out << "\\b"; break;
+            case '\f': out << "\\f"; break;
+            case '\n': out << "\\n"; break;
+            case '\r': out << "\\r"; break;
+            case '\t': out << "\\t"; break;
+            default:
+                if (c < 0x20) out << "\\u" << std::hex << std::setw(4) << std::setfill('0') << static_cast<int>(c) << std::dec;
+                else out << static_cast<char>(c);
+        }
+    }
+    return out.str();
+}
+
+static long long current_process_id() {
+#ifdef _WIN32
+    return static_cast<long long>(GetCurrentProcessId());
+#else
+    return static_cast<long long>(getpid());
+#endif
+}
+
+static bool process_is_alive(long long pid) {
+    if (pid <= 0) return false;
+#ifdef _WIN32
+    HANDLE process=OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,FALSE,static_cast<DWORD>(pid));
+    if (!process) return false;
+    DWORD code=0; const bool alive=GetExitCodeProcess(process,&code) && code==STILL_ACTIVE;
+    CloseHandle(process); return alive;
+#else
+    return kill(static_cast<pid_t>(pid),0)==0 || errno==EPERM;
+#endif
+}
+
+static fs::path mim_status_directory(const fs::path& executable_dir, const Ini& ini) {
+    fs::path status=trim(ini.get("status","directory","cache/status"));
+    if (status.is_relative()) status=executable_dir/status;
+    return status;
+}
+
+static bool atomic_write_text(const fs::path& destination, const std::string& text) {
+    std::error_code ec;
+    fs::create_directories(destination.parent_path(),ec);
+    const fs::path temporary=destination.string()+".tmp-"+std::to_string(current_process_id());
+    {
+        std::ofstream out(temporary,std::ios::binary|std::ios::trunc);
+        if (!out) return false;
+        out << text << '\n';
+        if (!out) return false;
+    }
+#ifdef _WIN32
+    fs::remove(destination,ec); ec.clear();
+#endif
+    fs::rename(temporary,destination,ec);
+    if (ec) { fs::remove(temporary,ec); return false; }
+    return true;
+}
+
+static std::string read_text_file(const fs::path& path) {
+    std::ifstream in(path,std::ios::binary);
+    if (!in) return {};
+    return std::string(std::istreambuf_iterator<char>(in),std::istreambuf_iterator<char>());
+}
+
+static void print_mim_status(const fs::path& executable_dir, const Ini& ini,
+                             const std::string& platform_name) {
+    const fs::path directory=mim_status_directory(executable_dir,ini);
+    std::vector<std::string> active;
+    std::error_code ec;
+    if (fs::is_directory(directory,ec)) {
+        for (const auto& entry : fs::directory_iterator(directory,ec)) {
+            if (ec || !entry.is_regular_file()) continue;
+            const std::string name=entry.path().filename().string();
+            if (name.rfind("job-",0)!=0 || name.size()<10 || name.substr(name.size()-5)!=".json") continue;
+            long long pid=0;
+            try { pid=std::stoll(name.substr(4,name.size()-9)); } catch (...) { pid=0; }
+            if (!process_is_alive(pid)) { fs::remove(entry.path(),ec); ec.clear(); continue; }
+            auto record=trim(read_text_file(entry.path()));
+            if (!record.empty()) active.push_back(record);
+        }
+    }
+    auto last=trim(read_text_file(directory/"last.json"));
+    auto last_transcode=trim(read_text_file(directory/"last-transcode.json"));
+    std::cout << "{\"mimVersion\":\"" << MIM_VERSION << "\",\"platform\":\""
+              << json_escape(platform_name) << "\",\"activeJobs\":[";
+    for (size_t i=0;i<active.size();++i) { if (i) std::cout << ','; std::cout << active[i]; }
+    std::cout << "],\"lastJob\":" << (last.empty()?"null":last)
+              << ",\"lastTranscodeJob\":" << (last_transcode.empty()?"null":last_transcode)
+              << "}\n";
+}
+
+static bool is_encode_backend(const std::string& backend) {
+    return backend=="qsv" || backend=="nvenc" || backend=="vaapi" || backend=="amf" ||
+        backend=="d3d12va" || backend=="software";
+}
+
+static std::string mim_status_record(const std::string& platform_name, long long pid,
+                                     const std::string& state, const std::string& backend,
+                                     const std::string& encoder, bool hardware_decode,
+                                     bool active_file, const std::optional<fs::path>& input,
+                                     const std::string& output_format, long long started_ms,
+                                     std::optional<int> exit_code=std::nullopt) {
+    const bool hardware_encode=is_encode_backend(backend) && backend!="software";
+    std::ostringstream out;
+    out << "{\"mimVersion\":\"" << MIM_VERSION << "\",\"platform\":\""
+        << json_escape(platform_name) << "\",\"mimPid\":" << pid
+        << ",\"state\":\"" << json_escape(state) << "\",\"backend\":\""
+        << json_escape(backend) << "\",\"encoder\":\"" << json_escape(encoder)
+        << "\",\"hardwareEncode\":" << (hardware_encode?"true":"false")
+        << ",\"hardwareDecode\":" << (hardware_decode?"true":"false")
+        << ",\"activeFile\":" << (active_file?"true":"false")
+        << ",\"input\":\"" << json_escape(input?input->string():"")
+        << "\",\"outputFormat\":\"" << json_escape(output_format)
+        << "\",\"startedEpochMs\":" << started_ms;
+    if (exit_code) out << ",\"exitCode\":" << *exit_code;
+    out << '}';
+    return out.str();
 }
 
 static uint64_t fnv1a64(const std::string& s) {
@@ -243,6 +371,27 @@ static void remove_opt_value(std::vector<std::string>& a, const std::vector<std:
         if(hit){ a.erase(a.begin()+i, a.begin()+std::min(a.size(),i+2)); } else ++i;
     }
 }
+static void remove_input_opt_value(std::vector<std::string>& a, const std::vector<std::string>& names) {
+    auto input=find_opt(a,{"-i"});
+    size_t end=input.value_or(a.size());
+    for(size_t i=0;i<end;) {
+        bool hit=false; for(auto& n:names) if(a[i]==n){hit=true;break;}
+        if(hit) {
+            const auto erase_end=std::min(a.size(),i+2);
+            const auto removed=erase_end-i;
+            a.erase(a.begin()+i,a.begin()+erase_end);
+            end-=std::min(end-i,removed);
+        } else ++i;
+    }
+}
+static void remove_output_opt_value(std::vector<std::string>& a, const std::vector<std::string>& names) {
+    auto input=find_opt(a,{"-i"});
+    size_t i=input ? std::min(a.size(),*input+2) : 0;
+    while(i<a.size()) {
+        bool hit=false; for(auto& n:names) if(a[i]==n){hit=true;break;}
+        if(hit) a.erase(a.begin()+i,a.begin()+std::min(a.size(),i+2)); else ++i;
+    }
+}
 static size_t input_option_pos(const std::vector<std::string>& a) {
     auto i=find_opt(a,{"-i"}); return i?*i:a.size();
 }
@@ -250,13 +399,66 @@ static size_t after_input_pos(const std::vector<std::string>& a) {
     auto i=find_opt(a,{"-i"}); if(!i) return 0; return std::min(a.size(),*i+2);
 }
 static void set_input_opt(std::vector<std::string>& a, const std::vector<std::string>& aliases, const std::string& canon, const std::string& value) {
-    remove_opt_value(a,aliases); auto p=input_option_pos(a); a.insert(a.begin()+p,{canon,value});
+    remove_input_opt_value(a,aliases); auto p=input_option_pos(a); a.insert(a.begin()+p,{canon,value});
 }
 static void set_output_opt(std::vector<std::string>& a, const std::vector<std::string>& aliases, const std::string& canon, const std::string& value) {
-    remove_opt_value(a,aliases); auto p=after_input_pos(a); a.insert(a.begin()+p,{canon,value});
+    remove_output_opt_value(a,aliases); auto p=after_input_pos(a); a.insert(a.begin()+p,{canon,value});
+}
+static std::optional<std::string> get_output_opt_value(const std::vector<std::string>& a,
+                                                       const std::vector<std::string>& names) {
+    auto input=find_opt(a,{"-i"});
+    size_t start=input ? std::min(a.size(),*input+2) : 0;
+    auto option=find_opt(a,names,start);
+    if(option && *option+1<a.size()) return a[*option+1];
+    return std::nullopt;
 }
 static void add_output_tokens(std::vector<std::string>& a, const std::vector<std::string>& t) {
     auto p=after_input_pos(a); a.insert(a.begin()+p,t.begin(),t.end());
+}
+
+static std::string format_seconds(double value) {
+    std::ostringstream out;
+    out << std::fixed << std::setprecision(3) << value;
+    auto text=out.str();
+    while(text.size()>1 && text.back()=='0') text.pop_back();
+    if(!text.empty() && text.back()=='.') text.pop_back();
+    return text;
+}
+
+static void add_completed_mpegts_seek_preroll(std::vector<std::string>& a,
+                                               const Ini& ini,
+                                               const std::optional<fs::path>& input,
+                                               bool active,
+                                               Logger& log) {
+    if(active || !input || !likely_mpegts(*input) ||
+       !ini.get_bool("seek","completed_mpegts_preroll",false)) return;
+
+    auto input_pos=find_opt(a,{"-i"});
+    auto seek_pos=find_opt(a,{"-ss"});
+    if(!input_pos || !seek_pos || *seek_pos>*input_pos || *seek_pos+1>=a.size()) return;
+
+    const double preroll=static_cast<double>(std::max<long long>(0,
+        ini.get_ll("seek","completed_mpegts_preroll_seconds",5)));
+    if(preroll<=0) return;
+
+    double requested=0;
+    try {
+        size_t consumed=0;
+        requested=std::stod(a[*seek_pos+1],&consumed);
+        if(consumed!=a[*seek_pos+1].size() || requested<=preroll) return;
+    } catch(...) {
+        // HH:MM:SS and other FFmpeg time syntaxes remain untouched. SageTV's
+        // MiniPlayer path currently emits numeric seconds.
+        return;
+    }
+
+    const auto input_seek=format_seconds(requested-preroll);
+    const auto output_seek=format_seconds(preroll);
+    a[*seek_pos+1]=input_seek;
+    auto after=after_input_pos(a);
+    a.insert(a.begin()+after,{"-ss",output_seek});
+    log.log("seek: completed MPEG-TS requested=",format_seconds(requested),
+            " input_seek=",input_seek," output_preroll=",output_seek);
 }
 
 static std::optional<long long> parse_bitrate_bps(const std::string& s) {
@@ -574,7 +776,8 @@ static std::optional<std::string> requested_transcode_family(const Ini& ini,
 }
 
 static bool looks_like_sagetv_job(const std::vector<std::string>& original) {
-    if(has_flag(original,"-stdinctrl") || has_flag(original,"-activefile")) return true;
+    if(has_flag(original,"-stdinctrl") || has_flag(original,"-activefile") ||
+       has_flag(original,"-sagetvdiscstream")) return true;
     auto i=find_opt(original,{"-i"});
     if(i && *i+1<original.size() && lower(original[*i+1]).rfind("stv://",0)==0) return true;
     return false;
@@ -625,6 +828,9 @@ static std::vector<std::string> rewrite_args(const Ini& ini, const PlatformInfo&
         return a;
     }
     const bool sagetv_job=looks_like_sagetv_job(original);
+    const bool disc_stream=has_flag(a,"-sagetvdiscstream");
+    remove_flag(a,"-sagetvdiscstream");
+    if(disc_stream) log.log("compat: SageTV DVD VM stream transform enabled");
     stdinctrl=has_flag(a,"-stdinctrl"); active=has_flag(a,"-activefile");
     remove_flag(a,"-stdinctrl"); remove_flag(a,"-activefile");
     translate_local_stv(a,log);
@@ -642,7 +848,7 @@ static std::vector<std::string> rewrite_args(const Ini& ini, const PlatformInfo&
                 a.insert(a.begin()+*ip,{"-follow","1"});
             } else log.log("WARNING activefile stock_follow cannot be applied to non-local/stv input");
         } else if(strategy!="disabled") {
-            log.log("WARNING active_file strategy '",strategy,"' not implemented in v0.4.5; treating as disabled");
+            log.log("WARNING active_file strategy '",strategy,"' not implemented in v0.4.7; treating as disabled");
         }
     }
 
@@ -687,7 +893,7 @@ static std::vector<std::string> rewrite_args(const Ini& ini, const PlatformInfo&
     remove_flag(a,"-deinterlace");
 
     // Preserve the original helper script's DVD/remux shortcut.
-    auto requested_format=get_opt_value(original,{"-f"});
+    auto requested_format=get_output_opt_value(original,{"-f"});
     auto copy_trigger=trim(ini.get("general","copy_only_format_trigger","dvd"));
     if(requested_format && !copy_trigger.empty() && ieq(*requested_format,copy_trigger)) {
         backend="copy";
@@ -706,11 +912,20 @@ static std::vector<std::string> rewrite_args(const Ini& ini, const PlatformInfo&
     if(input && native_file_exists(*input) && ini.get_bool("probe_cache","enabled",true)) {
         ProbeCache pc{exe_dir/ini.get("probe_cache","directory","cache/probe"),&log};
         bool hit=!active && pc.hit(*input);
-        long long normal_probe=ini.get_ll("input","probesize",300000), normal_an=ini.get_ll("input","analyzeduration",300000);
+        long long normal_probe=ini.get_ll("input","probesize",524288), normal_an=ini.get_ll("input","analyzeduration",500000);
+        // -follow 1 prevents the growing file from reaching a real EOF during
+        // stream discovery. A small normal probe can therefore identify the
+        // MPEG-2 PID but fail to obtain width/height, after which FFmpeg maps
+        // only audio for the entire job. Active inputs need their own bounded
+        // probe window; completed files may still use the faster cache path.
+        if(active) {
+            normal_probe=ini.get_ll("active_file","probesize",5000000);
+            normal_an=ini.get_ll("active_file","analyzeduration",5000000);
+        }
         if(hit) {
-            set_input_opt(a,{"-probesize"},"-probesize",std::to_string(ini.get_ll("probe_cache","cached_probesize",65536)));
-            set_input_opt(a,{"-analyzeduration"},"-analyzeduration",std::to_string(ini.get_ll("probe_cache","cached_analyzeduration",100000)));
-            set_input_opt(a,{"-max_probe_packets"},"-max_probe_packets",std::to_string(ini.get_ll("probe_cache","cached_max_probe_packets",128)));
+            set_input_opt(a,{"-probesize"},"-probesize",std::to_string(ini.get_ll("probe_cache","cached_probesize",524288)));
+            set_input_opt(a,{"-analyzeduration"},"-analyzeduration",std::to_string(ini.get_ll("probe_cache","cached_analyzeduration",500000)));
+            set_input_opt(a,{"-max_probe_packets"},"-max_probe_packets",std::to_string(ini.get_ll("probe_cache","cached_max_probe_packets",1024)));
             if(ini.get_bool("probe_cache","skip_duration_probe",true) && likely_mpegts(*input)) set_input_opt(a,{"-skip_estimate_duration_from_pts"},"-skip_estimate_duration_from_pts","1");
             log.log("probe-cache HIT input=",input->string());
         } else {
@@ -718,17 +933,27 @@ static std::vector<std::string> rewrite_args(const Ini& ini, const PlatformInfo&
             set_input_opt(a,{"-analyzeduration"},"-analyzeduration",std::to_string(normal_an));
             if(!active && native_file_exists(ffprobe))
                 pc.populate_async(ffprobe,*input,normal_probe,normal_an);
-            log.log(active ? "probe-cache BYPASS active input=" : "probe-cache MISS input=",input->string());
+            if(active)
+                log.log("probe-cache BYPASS active probe_bytes=",normal_probe,
+                        " analyze_us=",normal_an," input=",input->string());
+            else
+                log.log("probe-cache MISS input=",input->string());
         }
     } else {
-        if(lower(ini.get("input","probesize_mode","override"))=="override") set_input_opt(a,{"-probesize"},"-probesize",ini.get("input","probesize","300000"));
-        if(lower(ini.get("input","analyzeduration_mode","override"))=="override") set_input_opt(a,{"-analyzeduration"},"-analyzeduration",ini.get("input","analyzeduration","300000"));
+        if(lower(ini.get("input","probesize_mode","override"))=="override") set_input_opt(a,{"-probesize"},"-probesize",ini.get("input","probesize","524288"));
+        if(lower(ini.get("input","analyzeduration_mode","override"))=="override") set_input_opt(a,{"-analyzeduration"},"-analyzeduration",ini.get("input","analyzeduration","500000"));
     }
 
     if(lower(ini.get("input","fflags_mode","append"))=="append") merge_plus_flags(a,ini.get("input","fflags","+genpts+discardcorrupt"));
     if(lower(ini.get("input","thread_queue_size_mode","override"))=="override") set_input_opt(a,{"-thread_queue_size"},"-thread_queue_size",ini.get("input","thread_queue_size","8192"));
     if(lower(ini.get("input","max_delay_mode","override"))=="override") set_input_opt(a,{"-max_delay"},"-max_delay",ini.get("input","max_delay","500000"));
     if(active && input && likely_mpegts(*input) && ini.get_ll("input","mpegts_resync_size",0)>0) set_input_opt(a,{"-resync_size"},"-resync_size",ini.get("input","mpegts_resync_size","1048576"));
+    // Directly seeking into broadcast MPEG-2 TS can land between sequence
+    // headers. On the commissioned Intel host that produced invalid 0x0 MPEG-2
+    // frames and eventually crashed FFmpeg's QSV transcode after a MiniPlayer
+    // FF/REW. Seek a few seconds earlier and discard that bounded preroll on
+    // the output side so the decoder reaches a clean GOP before emitting data.
+    add_completed_mpegts_seek_preroll(a,ini,input,active,log);
     if(ini.get_bool("seek","fast_seek",false)) { auto pos=input_option_pos(a); a.insert(a.begin()+pos,"-noaccurate_seek"); }
 
     const auto family=transcode_family.value_or("h264");
@@ -758,9 +983,24 @@ static std::vector<std::string> rewrite_args(const Ini& ini, const PlatformInfo&
     if(stdinctrl && ini.get_bool("stdinctrl","enabled",true))
         a.insert(a.begin(),"-sagetvratectrl");
 
+    const bool preserve_a53cc=ini.get_bool("closed_captions","preserve_a53cc",true);
+    // Hardware MPEG-2 decoders commonly drop AV_FRAME_DATA_A53_CC before the
+    // encoder can write it as H.264 user data. Preserve the decoded A/53 frame
+    // side data in system memory for every GPU encoder. Deinterlace/scale then
+    // uploads the video frames to QSV/VAAPI/NVENC, so video encoding remains on
+    // the selected GPU while captions follow FFmpeg's native -a53cc path.
+    // qsv_software_decode remains a backward-compatible per-backend override;
+    // caption_software_decode is the new cross-vendor default.
+    const bool caption_decode_policy=ini.has("closed_captions","caption_software_decode")
+        ? ini.get_bool("closed_captions","caption_software_decode",true)
+        : (backend=="qsv" && ini.get_bool("closed_captions","qsv_software_decode",true));
+    const bool force_caption_software_decode=preserve_a53cc && caption_decode_policy &&
+        (backend=="qsv" || backend=="nvenc" || backend=="vaapi");
     const bool configured_hardware_decode=ini.get_bool("hardware","hardware_decode",false);
-    const bool hardware_decode=configured_hardware_decode &&
+    const bool hardware_decode=configured_hardware_decode && !force_caption_software_decode &&
         (!active || ini.get_bool("hardware","active_file_hardware_decode",false));
+    if(force_caption_software_decode && configured_hardware_decode)
+        log.log("compat: ",backend," uses caption-preserving software decode with hardware filter/encode");
     if(active && configured_hardware_decode && !hardware_decode)
         log.log("compat: active-file uses software decode with ",backend," encode");
 
@@ -846,6 +1086,24 @@ static std::vector<std::string> rewrite_args(const Ini& ini, const PlatformInfo&
     if(backend=="qsv" && hardware_decode) {
         apply_hardware_filter("qsv","deinterlace_qsv",
                               "deinterlace_qsv,scale_qsv=w=%w%:h=%h%");
+    } else if(backend=="qsv") {
+        // h264_qsv accepts NV12 system-memory frames and performs its own
+        // upload. Keep deinterlace/scale in software when decoding in software.
+        // The former hwupload+scale_qsv chain ran at almost exactly realtime
+        // on growing 1080i MPEG-2 input and intermittently delivered audio
+        // before any video. Feeding system-memory NV12 to the same QSV encoder
+        // preserves A/53 side data and leaves substantially more live headroom.
+        std::string vf;
+        if(!requested_width.empty() && !requested_height.empty()) {
+            vf=expand_filter_size(ini.get("filters","qsv_software_scale",
+                    "yadif=deint=interlaced,scale=w=%w%:h=%h%,format=nv12"),
+                    requested_width,requested_height);
+            remove_opt_value(a,{"-s"});
+        } else {
+            vf=ini.get("filters","qsv_software_no_scale",
+                       "yadif=deint=interlaced,format=nv12");
+        }
+        if(!trim(vf).empty()) set_output_opt(a,{"-vf","-filter:v"},"-vf",vf);
     } else if(backend=="nvenc" && hardware_decode) {
         apply_hardware_filter("nvenc","yadif_cuda=deint=interlaced",
                               "yadif_cuda=deint=interlaced,scale_cuda=w=%w%:h=%h%");
@@ -902,7 +1160,16 @@ static std::vector<std::string> rewrite_args(const Ini& ini, const PlatformInfo&
     const auto requested_output_format = get_opt_value(original,{"-f"});
 
     if(preserve_contract && requested_audio) {
-        log.log("compat: preserving SageTV requested audio contract codec=",*requested_audio);
+        // SageTV's legacy FFmpeg adapter still translates AAC to libfaac. Modern
+        // FFmpeg removed that external encoder years ago and provides the native
+        // encoder as "aac". Preserve the requested AAC wire codec while translating
+        // only the obsolete encoder implementation name.
+        if(ieq(*requested_audio,"libfaac")) {
+            set_output_opt(a,{"-acodec","-c:a","-codec:a"},"-c:a","aac");
+            log.log("compat: translated obsolete SageTV audio encoder libfaac to aac");
+        } else {
+            log.log("compat: preserving SageTV requested audio contract codec=",*requested_audio);
+        }
     } else {
         auto amode=lower(ini.get("audio","mode","copy"));
         if(amode=="copy") {
@@ -926,13 +1193,14 @@ static std::vector<std::string> rewrite_args(const Ini& ini, const PlatformInfo&
 
     // MPEG-TS-specific options must never be injected into Matroska/other fixed-push
     // formats.  Determine the final output muxer after the compatibility decision.
-    auto effective_format=get_opt_value(a,{"-f"});
+    auto effective_format=get_output_opt_value(a,{"-f"});
     const bool output_is_mpegts=effective_format && ieq(*effective_format,"mpegts");
     if(output_is_mpegts) {
         if(lower(ini.get("output","muxpreload_mode","override"))=="override") set_output_opt(a,{"-muxpreload"},"-muxpreload",ini.get("output","muxpreload","0"));
         if(lower(ini.get("output","muxdelay_mode","override"))=="override") set_output_opt(a,{"-muxdelay"},"-muxdelay",ini.get("output","muxdelay","0"));
         if(ini.get_bool("output","mpegts_initial_discontinuity",true)) {
             auto mf=get_opt_value(a,{"-mpegts_flags"}); auto v=mf.value_or(""); if(v.find("initial_discontinuity")==std::string::npos) v += "+initial_discontinuity";
+            if(ini.get_bool("output","mpegts_resend_headers",true) && v.find("resend_headers")==std::string::npos) v += "+resend_headers";
             set_output_opt(a,{"-mpegts_flags"},"-mpegts_flags",v);
         }
     } else {
@@ -942,7 +1210,7 @@ static std::vector<std::string> rewrite_args(const Ini& ini, const PlatformInfo&
     }
 
     // Preserve A/53 CEA-608/708 caption side data where common H.264 encoders expose -a53cc.
-    if(ini.get_bool("closed_captions","preserve_a53cc",true) && (backend=="qsv"||backend=="nvenc"||backend=="software"))
+    if(preserve_a53cc && (backend=="qsv"||backend=="nvenc"||backend=="vaapi"||backend=="software"))
         set_output_opt(a,{"-a53cc"},"-a53cc","1");
 
     // SageTV live recordings with a .ts/.m2ts suffix are known MPEG-TS. Tell
@@ -1174,23 +1442,39 @@ static int run_child_posix(const fs::path& exe, const std::vector<std::string>& 
             if(re&POLLIN) {
                 char tmp[1024]; ssize_t n=read(STDIN_FILENO,tmp,sizeof(tmp));
                 if(n>0){
-                    buf.append(tmp,(size_t)n); size_t e;
-                    while((e=buf.find_first_of("\r\n"))!=std::string::npos){
-                        auto line=buf.substr(0,e); size_t skip=1;
-                        if(e+1<buf.size() && buf[e]=='\r'&&buf[e+1]=='\n')skip=2;
-                        buf.erase(0,e+skip);
-                        auto t=trim(line); if(t.empty()) continue; log.log("stdin: ",t);
-                        if(is_stop_cmd(cc,t)) request_terminate("stop");
-                        else if(starts_ci(t,"inactivefile")){
-                            if(cc.active && cc.inactive_action=="terminate_child") request_terminate("inactivefile");
-                            else log.log("control: inactivefile consumed action=",cc.inactive_action);
+                    if(!cc.enabled) {
+                        ssize_t off=0;
+                        while(off<n && child_stdin_open) {
+                            ssize_t written=write(pin[1],tmp+off,(size_t)(n-off));
+                            if(written>0) off+=written;
+                            else if(written<0 && errno==EINTR) continue;
+                            else {
+                                if(errno==EPIPE || errno==EBADF)
+                                    log.log("safety: ffmpeg stdin closed during raw media forwarding");
+                                else
+                                    log.log("WARNING raw media write to ffmpeg stdin failed errno=",errno);
+                                close(pin[1]); pin[1]=-1; child_stdin_open=false;
+                            }
                         }
-                        else if(starts_ci(t,"videorateadapt")||starts_ci(t,"sagetv_videorateadapt")){
-                            if(!cc.rate_enabled) log.log("control: videorateadapt consumed (stream-copy/no rate-control encoder)");
-                            else if(cc.rate_mode=="forward") send_line(t);
-                            else log.log("control: videorateadapt ignored mode=",cc.rate_mode);
+                    } else {
+                        buf.append(tmp,(size_t)n); size_t e;
+                        while((e=buf.find_first_of("\r\n"))!=std::string::npos){
+                            auto line=buf.substr(0,e); size_t skip=1;
+                            if(e+1<buf.size() && buf[e]=='\r'&&buf[e+1]=='\n')skip=2;
+                            buf.erase(0,e+skip);
+                            auto t=trim(line); if(t.empty()) continue; log.log("stdin: ",t);
+                            if(is_stop_cmd(cc,t)) request_terminate("stop");
+                            else if(starts_ci(t,"inactivefile")){
+                                if(cc.active && cc.inactive_action=="terminate_child") request_terminate("inactivefile");
+                                else log.log("control: inactivefile consumed action=",cc.inactive_action);
+                            }
+                            else if(starts_ci(t,"videorateadapt")||starts_ci(t,"sagetv_videorateadapt")){
+                                if(!cc.rate_enabled) log.log("control: videorateadapt consumed (stream-copy/no rate-control encoder)");
+                                else if(cc.rate_mode=="forward") send_line(t);
+                                else log.log("control: videorateadapt ignored mode=",cc.rate_mode);
+                            }
+                            else send_line(t);
                         }
-                        else if(cc.enabled) send_line(t);
                     }
                 } else if(n==0) handle_parent_stdin_closed("stdin EOF");
             }
@@ -1282,35 +1566,53 @@ static int run_child_windows(const fs::path& exe,const std::vector<std::string>&
         if(wait==WAIT_OBJECT_0) break;
         if(!stdin_pipe || hin==INVALID_HANDLE_VALUE || hin==nullptr) continue;
         DWORD avail=0;
-        if(!PeekNamedPipe(hin,nullptr,0,nullptr,&avail,nullptr)) { stdin_pipe=false; continue; }
+        if(!PeekNamedPipe(hin,nullptr,0,nullptr,&avail,nullptr)) {
+            stdin_pipe=false;
+            if(wr!=INVALID_HANDLE_VALUE && wr!=nullptr) { CloseHandle(wr); wr=nullptr; }
+            continue;
+        }
         if(!avail) continue;
         char tmp[1024]; DWORD n=0;
         if(!ReadFile(hin,tmp,(DWORD)std::min<DWORD>((DWORD)sizeof(tmp),avail),&n,nullptr) || n==0) { stdin_pipe=false; continue; }
-        buf.append(tmp,(size_t)n);
-        size_t e;
-        while((e=buf.find_first_of("\r\n"))!=std::string::npos) {
-            auto line=buf.substr(0,e); size_t skip=1;
-            if(e+1<buf.size() && buf[e]=='\r'&&buf[e+1]=='\n')skip=2;
-            buf.erase(0,e+skip);
-            auto t=trim(line); if(t.empty())continue;
-            log.log("stdin: ",t);
-            if(is_stop_cmd(cc,t)) {
-                log.log("control: stop -> TerminateProcess pid=",pi.dwProcessId);
-                TerminateProcess(pi.hProcess,0);
-            } else if(starts_ci(t,"inactivefile")) {
-                if(cc.active && cc.inactive_action=="terminate_child") {
-                    log.log("control: inactivefile -> terminate stock-follow child pid=",pi.dwProcessId);
+        if(!cc.enabled) {
+            DWORD off=0;
+            while(off<n && wr!=nullptr) {
+                DWORD written=0;
+                if(!WriteFile(wr,tmp+off,n-off,&written,nullptr) || written==0) {
+                    log.log("safety: ffmpeg stdin closed during raw media forwarding code=",GetLastError());
+                    CloseHandle(wr); wr=nullptr;
+                    break;
+                }
+                off+=written;
+            }
+        } else {
+            buf.append(tmp,(size_t)n);
+            size_t e;
+            while((e=buf.find_first_of("\r\n"))!=std::string::npos) {
+                auto line=buf.substr(0,e); size_t skip=1;
+                if(e+1<buf.size() && buf[e]=='\r'&&buf[e+1]=='\n')skip=2;
+                buf.erase(0,e+skip);
+                auto t=trim(line); if(t.empty())continue;
+                log.log("stdin: ",t);
+                if(is_stop_cmd(cc,t)) {
+                    log.log("control: stop -> TerminateProcess pid=",pi.dwProcessId);
                     TerminateProcess(pi.hProcess,0);
-                } else log.log("control: inactivefile consumed action=",cc.inactive_action);
-            } else if(starts_ci(t,"videorateadapt")||starts_ci(t,"sagetv_videorateadapt")) {
-                if(!cc.rate_enabled) log.log("control: videorateadapt consumed (stream-copy/no rate-control encoder)");
-                else if(cc.rate_mode=="forward") send_line(t);
-                else log.log("control: videorateadapt ignored mode=",cc.rate_mode);
-            } else if(cc.enabled) send_line(t);
+                } else if(starts_ci(t,"inactivefile")) {
+                    if(cc.active && cc.inactive_action=="terminate_child") {
+                        log.log("control: inactivefile -> terminate stock-follow child pid=",pi.dwProcessId);
+                        TerminateProcess(pi.hProcess,0);
+                    } else log.log("control: inactivefile consumed action=",cc.inactive_action);
+                } else if(starts_ci(t,"videorateadapt")||starts_ci(t,"sagetv_videorateadapt")) {
+                    if(!cc.rate_enabled) log.log("control: videorateadapt consumed (stream-copy/no rate-control encoder)");
+                    else if(cc.rate_mode=="forward") send_line(t);
+                    else log.log("control: videorateadapt ignored mode=",cc.rate_mode);
+                } else send_line(t);
+            }
         }
     }
     DWORD rc=1; GetExitCodeProcess(pi.hProcess,&rc);
-    CloseHandle(wr); CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
+    if(wr!=nullptr) CloseHandle(wr);
+    CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
     return (int)rc;
 }
 #endif
@@ -1369,12 +1671,22 @@ int main(int argc,char** argv){
         std::cout << "SageTV FFmpeg MIM " << MIM_VERSION << " (" << platform.name << ")\n";
         return 0;
     }
+    if(argc>=2 && std::string(argv[1])=="--mim-capabilities") {
+        std::cout << "{\"mimVersion\":\"" << MIM_VERSION
+                  << "\",\"dvdStreamTransform\":true,\"dvdVideoDemux\":true}\n";
+        return 0;
+    }
     bool dry_run = argc>=2 && std::string(argv[1])=="--mim-dry-run";
+    bool status_query = argc>=2 && std::string(argv[1])=="--mim-status";
     fs::path ini_path=dir/"ffmpeg.real.ini";
     if(const char* e=std::getenv("SAGETV_FFMPEG_MIM_INI")) ini_path=e;
     Ini ini; if(!ini.load(ini_path)){ std::cerr<<"SageTV FFmpeg MIM: cannot load "<<ini_path<<"\n"; return 78; }
     auto forced=lower(trim(ini.get("platform","force_platform","auto")));
     if(forced!="auto" && !forced.empty()) platform.name=forced;
+    if(status_query) {
+        print_mim_status(dir,ini,platform.name);
+        return 0;
+    }
     std::string log_name=trim(ini.get("logging","file","./ffmpeg.real.log"));
     // v0.4.0 and earlier shipped SageTVFFmpegMIM.log as the default. Treat that
     // exact legacy default as migratable so an older INI does not preserve the
@@ -1389,6 +1701,13 @@ int main(int argc,char** argv){
     auto real=resolve_config_path(dir,ini,platform,false), ffprobe=resolve_config_path(dir,ini,platform,true);
     if(!native_file_exists(real)){ std::cerr<<"SageTV FFmpeg MIM: real FFmpeg not found: "<<real<<"\n"; log.log("ERROR real FFmpeg missing ",real.string()); return 127; }
     std::vector<std::string> orig; for(int i=dry_run?2:1;i<argc;++i)orig.emplace_back(argv[i]);
+    // Administrators and container health checks commonly use GNU-style long
+    // management flags, while FFmpeg itself accepts the historical single-dash
+    // spelling. Normalize only the two unambiguous aliases before passthrough.
+    for(auto& arg:orig) {
+        if(arg=="--version") arg="-version";
+        else if(arg=="--help") arg="-help";
+    }
     if(ini.get_bool("logging","log_original_command",true))log.log("original: ",join_display(self,orig));
     bool stdinctrl=false,active=false; std::optional<fs::path> input; std::string backend;
     auto final_args=rewrite_args(ini,platform,dir,real,ffprobe,orig,log,stdinctrl,active,input,backend);
@@ -1397,6 +1716,20 @@ int main(int argc,char** argv){
         std::cout << "backend=" << backend << "\n" << join_display(real,final_args) << "\n";
         return 0;
     }
+
+    const auto started_ms=std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    const long long mim_pid=current_process_id();
+    const auto encoder=get_opt_value(final_args,{"-vcodec","-c:v","-codec:v"}).value_or("");
+    const auto output_format=get_output_opt_value(final_args,{"-f"}).value_or("");
+    const bool status_hardware_decode=has_flag(final_args,"-hwaccel");
+    const fs::path status_dir=mim_status_directory(dir,ini);
+    const fs::path active_status=status_dir/("job-"+std::to_string(mim_pid)+".json");
+    const auto running_status=mim_status_record(platform.name,mim_pid,"running",backend,encoder,
+        status_hardware_decode,active,input,output_format,started_ms);
+    atomic_write_text(active_status,running_status);
+    atomic_write_text(status_dir/"last.json",running_status);
+    if(is_encode_backend(backend)) atomic_write_text(status_dir/"last-transcode.json",running_status);
 
     if(active && input) wait_for_active_video(ini,*input,log);
 
@@ -1408,6 +1741,12 @@ int main(int argc,char** argv){
     int rc=run_child_posix(real,final_args,cc,log,ini.get_bool("logging","log_ffmpeg_stderr",true));
 #endif
     log.log("child exit rc=",rc);
+    const auto stopped_status=mim_status_record(platform.name,mim_pid,"stopped",backend,
+        encoder,status_hardware_decode,active,input,output_format,started_ms,rc);
+    atomic_write_text(status_dir/"last.json",stopped_status);
+    if(is_encode_backend(backend)) atomic_write_text(status_dir/"last-transcode.json",stopped_status);
+    std::error_code status_remove_error;
+    fs::remove(active_status,status_remove_error);
     // A failed transcoder must be contained as a playback EOF, never promoted
     // into a MiniPlayer/server process failure. SageTV requested -stdinctrl on
     // realtime transcoder jobs, so limit this normalization to that contract.

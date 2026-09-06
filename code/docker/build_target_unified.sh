@@ -59,11 +59,21 @@ python3 "$PROJECT/code/tools/apply_videorateadapt.py" \
   "$SRC" --compat-dir "$PROJECT/code/compat"
 
 cd "$SRC"
+cc_command="${CC:-cc}"
+cxx_command="${CXX:-c++}"
+cc_args=("$cc_command")
+cxx_args=("$cxx_command")
+if command -v ccache >/dev/null 2>&1; then
+  ccache --max-size "${CCACHE_MAXSIZE:-20G}" >/dev/null
+  cc_args=(ccache "$cc_command")
+  cxx_args=(ccache "$cxx_command")
+fi
 echo "================================================================"
 echo "SageTV FFmpeg/MIM unified build"
 echo "Target      : $TARGET_ID"
 echo "FFmpeg tag  : $FFMPEG_TAG"
 echo "Compiler    : ${CC:-unset} / ${CXX:-unset}"
+echo "Compiler cache: $(command -v ccache 2>/dev/null || echo disabled)"
 echo "================================================================"
 
 # Use the exact configure environment captured from the corresponding actual
@@ -78,12 +88,12 @@ echo "================================================================"
   --extra-libs="${FF_LIBS:-}" \
   --extra-ldflags="${FF_LDFLAGS:-${LDFLAGS:-}}" \
   --extra-ldexeflags="${FF_LDEXEFLAGS:-}" \
-  --cc="${CC:-cc}" \
-  --cxx="${CXX:-c++}" \
+  --cc="${cc_args[*]}" \
+  --cxx="${cxx_args[*]}" \
   --ar="${AR:-ar}" \
   --ranlib="${RANLIB:-ranlib}" \
   --nm="${NM:-nm}" \
-  --extra-version="sagetv-mim-v0.4.5" \
+  --extra-version="sagetv-mim-v0.4.8" \
   || { cat ffbuild/config.log; exit 1; }
 
 JOBS="${BUILD_JOBS:-0}"
@@ -111,7 +121,7 @@ if [[ "$TARGET_ID" == linux-x64 ]]; then
   cp "$PROJECT/diagnose_sagetv_abort.sh" "$OUT/diagnose_sagetv_abort.sh"
 fi
 
-"${CXX:-c++}" "${MIM_FLAGS[@]}" \
+"${cxx_args[@]}" "${MIM_FLAGS[@]}" \
   "$PROJECT/code/mim/sagetv_ffmpeg_mim.cpp" \
   -o "$OUT/$MIM_NAME"
 
@@ -122,7 +132,7 @@ else
 fi
 
 {
-  echo "SageTV FFmpeg MIM v0.4.5"
+  echo "SageTV FFmpeg MIM v0.4.8"
   echo "build_environment=${OPENSAGETV_VIBE_BUILD_ENV_VERSION:-unknown}"
   echo "ffmpeg_toolchain=${OPENSAGETV_VIBE_FFMPEG_TOOLCHAIN:-unknown}"
   echo "target=$TARGET_ID"
@@ -176,3 +186,6 @@ fi
 )
 
 echo "[SUCCESS] $TARGET_ID -> $OUT"
+if command -v ccache >/dev/null 2>&1; then
+  ccache --show-stats
+fi
