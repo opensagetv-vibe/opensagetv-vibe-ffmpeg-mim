@@ -54,6 +54,25 @@ generate_source() {
 generate_source 30000/1001 5 "$SOURCE_30"
 generate_source 60000/1001 6 "$SOURCE_60"
 
+# Exercise the exact stock-era imported-video thumbnail command against the
+# real pinned FFmpeg, not only the argument-rewrite dry run. This catches old
+# crop ordering and removed filter/output options that a fake child accepts.
+THUMBNAIL_OUT="$TMP/legacy-thumbnail.jpg"
+SAGETV_FFMPEG_MIM_INI="$INI" "$MIM" \
+  -hide_banner -loglevel error -y -skip_frame nokey -ss 1 -i "$SOURCE_30" \
+  -f mjpeg -deinterlace -vf crop=0:8:0:0,scale=512:288 \
+  -vframes 1 -an -minpixvar 300 -minpixnumframes 150 -minpixenergy 1 \
+  -vsync 0 "$THUMBNAIL_OUT"
+[[ -s "$THUMBNAIL_OUT" ]]
+thumbnail_stream="$($PROBE -v error -select_streams v:0 \
+  -show_entries stream=codec_name,width,height -of csv=p=0 "$THUMBNAIL_OUT")"
+[[ "$thumbnail_stream" == "mjpeg,512,288" ]]
+grep -q 'compat: removed obsolete SageTV thumbnail frame-selection options' "$LOG"
+grep -q 'compat: translated legacy SageTV thumbnail crop order' "$LOG"
+grep -q 'compat: translated legacy thumbnail -deinterlace to yadif' "$LOG"
+grep -q 'compat: translated legacy -vsync to -fps_mode passthrough' "$LOG"
+echo '[PASS] real FFmpeg legacy SageTV thumbnail compatibility'
+
 assert_media_integrity() {
   local media="$1" label="$2" minimum_video_packets="${3:-20}"
   local streams video_packets first_video first_audio

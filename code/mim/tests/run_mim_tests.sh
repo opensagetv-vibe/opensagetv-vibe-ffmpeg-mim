@@ -92,6 +92,29 @@ d="$($TMP/ffmpeg --mim-dry-run -dumpmetadata -v 2 -i "$TMP/media/test.ts")"
 [[ -f "$TMP/ffmpeg.real.log" ]]
 grep -q 'mim-start version=0.4.8' "$TMP/ffmpeg.real.log"
 
+# SageTV's private thumbnail frame-selection switches were removed upstream.
+# MIM must drop their option/value pairs while preserving the ordinary MJPEG
+# thumbnail command on modern FFmpeg.
+d="$($TMP/ffmpeg --mim-dry-run -y -skip_frame nokey -i "$TMP/media/test.ts" -f mjpeg -deinterlace -vf crop=0:8:0:0,scale=512:288 -vframes 1 -an -minpixvar 300 -minpixnumframes 150 -vsync 0 "$TMP/thumb.jpg")"
+[[ "$d" == *"backend=passthrough"* ]]
+[[ "$d" != *"minpixvar"* ]]
+[[ "$d" != *"minpixnumframes"* ]]
+[[ "$d" != *"-vsync"* ]]
+[[ "$d" != *"-deinterlace"* ]]
+[[ "$d" == *"-fps_mode passthrough"* ]]
+[[ "$d" == *"-vf yadif,crop=iw:ih-8:0:8,scale=512:288"* ]]
+[[ "$d" == *"-f mjpeg"* ]]
+[[ "$d" == *"-vframes 1"* ]]
+d="$($TMP/ffmpeg --mim-dry-run -y -i "$TMP/media/test.ts" -f mjpeg -vframes 1 -an -minpixenergy 1 -vsync 0 "$TMP/thumb-fallback.jpg")"
+[[ "$d" != *"minpixenergy"* ]]
+[[ "$d" != *"-vsync"* ]]
+[[ "$d" == *"-fps_mode passthrough"* ]]
+[[ "$d" == *"$TMP/thumb-fallback.jpg"* ]]
+grep -q 'compat: removed obsolete SageTV thumbnail frame-selection options' "$TMP/ffmpeg.real.log"
+grep -q 'compat: translated legacy -vsync to -fps_mode passthrough' "$TMP/ffmpeg.real.log"
+grep -q 'compat: translated legacy thumbnail -deinterlace to yadif' "$TMP/ffmpeg.real.log"
+grep -q 'compat: translated legacy SageTV thumbnail crop order' "$TMP/ffmpeg.real.log"
+
 # The explicit DISC stream marker makes a VM-produced MPEG-PS pipe a SageTV
 # transcode job without sharing stdin with -stdinctrl. Input and output -f
 # options must remain on their respective sides of -i.

@@ -13,6 +13,20 @@ The Linux/Windows toolchain Docker stages are owned by
 `opensagetv-vibe-build-env`; this repository has no standalone Docker image or
 container lifecycle.
 
+The 2026-09-09 stock-era thumbnail compatibility work passes native/static and
+real FFmpeg 9 integration. The exact SageTV command, including private
+`-minpix*` switches, numeric `-vsync`, removed `-deinterlace`, and the old
+x:y:w:h `crop=0:8:0:0` expression, produced a valid 512x288 MJPEG after the
+narrow thumbnail-only rewrite. The rebuilt Linux wrapper SHA-256 is
+`2a178d9689fd46947ff8e84496e5dc160f87143a14292565d511889ed2fdfb84`.
+The complete lifecycle/media suite passed with 1659 ms deliberate partial-join
+first output and 235/270/303 ms repeated starts, plus full decode, teardown,
+and orphan-process checks.
+It is staged only in the isolated Vibe server appdata; the previous wrapper is
+recoverable from `.component-backups/mim-thumbnail-crop-20260909-1222`.
+Physical SageTV commissioning awaits a normal restart of `.232`; stock `.175`
+was not modified and remains the primary Android compatibility baseline.
+
 The 2026-09-05 clean target rebuild produced Linux `ffmpeg.real` SHA-256
 `3e77761abc5a430f8ff43041255e7612e6c988ced373697e4772a79686634ae0`
 and `ffmpeg_MIM` SHA-256

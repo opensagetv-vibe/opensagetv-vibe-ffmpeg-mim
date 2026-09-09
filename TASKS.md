@@ -3,6 +3,13 @@
 This is the only active FFmpeg/MIM backlog. Completed work is removed and
 recorded in `CHANGELOG.md` and `HANDOFF.md`.
 
+- [ ] Finish isolated-server commissioning of the locally passing stock-era
+  thumbnail command compatibility. MIM now removes the historical private
+  frame-selection options, maps numeric `-vsync`, replaces the removed
+  `-deinterlace`, and converts SageTV's old `crop=0:8:0:0` argument order only
+  for recognized thumbnail jobs. The exact command produces a valid 512x288
+  MJPEG with FFmpeg 9; the isolated `.232` SageTV service must be restarted
+  before its server-generated artwork can be verified.
 - [ ] Complete physical AMD VAAPI and NVIDIA NVENC tests. Intel VAAPI and
   deliberately failed-hardware software fallback pass; Intel QSV remains
   experimental after reproducible return-code-139 crashes.

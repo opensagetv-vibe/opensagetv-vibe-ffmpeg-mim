@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Added narrowly scoped compatibility for SageTV's historical imported-video
+  thumbnail command on FFmpeg 9. Recognized thumbnail jobs now discard the
+  removed `-minpixvar`/`-minpixnumframes`/`-minpixenergy` switches, translate
+  numeric `-vsync` to `-fps_mode`, replace global `-deinterlace` with `yadif`,
+  and convert the old x:y:w:h `crop=0:8:0:0` expression to the modern
+  `crop=iw:ih-8:0:8` form. An exact real-FFmpeg integration generated and
+  decoded a 512x288 MJPEG. The complete lifecycle/media suite also passed,
+  including completed/growing input, join-in-progress, three repeated starts,
+  decode integrity, teardown, and orphan checks; normal transcodes are outside
+  this compatibility gate and remain unchanged.
 - Prepared v0.4.8 source for public GitHub development with consistent
   contributor, security, third-party, source-only CI, task, handoff, and
   unified-workflow documentation. The repository does not publish a container

@@ -807,6 +807,68 @@ static std::vector<std::string> rewrite_args(const Ini& ini, const PlatformInfo&
                                               std::string& backend) {
     std::vector<std::string> a=original;
 
+    // SageTV's thumbnail generator used private options from its historical
+    // FFmpeg fork. Current FFmpeg has no equivalents and aborts before reading
+    // the input when any of them are present. They only controlled which still
+    // frame the old fork preferred; removing them preserves the requested
+    // one-frame MJPEG output and lets the existing key-frame/fallback commands
+    // complete.
+    const bool legacy_thumbnail_options = has_flag(a,"-minpixvar") ||
+        has_flag(a,"-minpixnumframes") || has_flag(a,"-minpixenergy");
+    if (legacy_thumbnail_options) {
+        remove_opt_value(a,{"-minpixvar","-minpixnumframes","-minpixenergy"});
+        log.log("compat: removed obsolete SageTV thumbnail frame-selection options");
+
+        // SageTV's bundled FFmpeg crop filter parsed four numeric arguments
+        // as x:y:w:h and treated zero width/height as the remaining input.
+        // Current FFmpeg parses them as w:h:x:y, so the stock thumbnail value
+        // crop=0:8:0:0 becomes an invalid zero-width image. Translate only the
+        // exact stock value, and only inside the already recognized legacy
+        // thumbnail command.
+        auto thumbnail_vf=find_opt(a,{"-vf","-filter:v"});
+        if (thumbnail_vf && *thumbnail_vf+1<a.size()) {
+            const std::string old_crop="crop=0:8:0:0";
+            auto crop_pos=a[*thumbnail_vf+1].find(old_crop);
+            if (crop_pos!=std::string::npos) {
+                a[*thumbnail_vf+1].replace(crop_pos,old_crop.size(),
+                                            "crop=iw:ih-8:0:8");
+                log.log("compat: translated legacy SageTV thumbnail crop order");
+            }
+        }
+
+        // The same historical thumbnail command may request the removed
+        // global -deinterlace switch. Preserve that behavior with FFmpeg's
+        // current yadif filter, prepending it to SageTV's crop/scale chain.
+        // Restrict this rewrite to the recognized private-thumbnail command
+        // so unrelated ffmpeg invocations remain transparent passthrough.
+        if (has_flag(a,"-deinterlace")) {
+            remove_flag(a,"-deinterlace");
+            auto vf=find_opt(a,{"-vf","-filter:v"});
+            if (vf && *vf+1<a.size()) {
+                if (lower(a[*vf+1]).rfind("yadif",0)!=0)
+                    a[*vf+1]="yadif,"+a[*vf+1];
+            } else {
+                set_output_opt(a,{"-vf","-filter:v"},"-vf","yadif");
+            }
+            log.log("compat: translated legacy thumbnail -deinterlace to yadif");
+        }
+    }
+
+    // Current FFmpeg replaced the global -vsync option with the per-output
+    // -fps_mode option. SageTV still emits numeric -vsync values for imported
+    // video thumbnails and several legacy transcode profiles. Translate the
+    // established values before any early passthrough return so metadata and
+    // thumbnail jobs remain valid on FFmpeg 9 as well as mapped transcodes.
+    for (size_t i=0; i+1<a.size(); ++i) {
+        if (a[i]!="-vsync") continue;
+        a[i]="-fps_mode";
+        if (a[i+1]=="-1") a[i+1]="auto";
+        else if (a[i+1]=="0" || ieq(a[i+1],"drop")) a[i+1]="passthrough";
+        else if (a[i+1]=="1") a[i+1]="cfr";
+        else if (a[i+1]=="2") a[i+1]="vfr";
+        log.log("compat: translated legacy -vsync to -fps_mode ",a[i+1]);
+    }
+
     // SageTV's historical transcoder calls `-dumpmetadata -v 2 -i <file>`.
     // -dumpmetadata was a SageTV-only FFmpeg customization and does not exist
     // in current upstream FFmpeg.  Passing it through causes an immediate
