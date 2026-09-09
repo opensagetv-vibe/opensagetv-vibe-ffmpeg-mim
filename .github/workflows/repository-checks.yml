@@ -14,7 +14,7 @@ jobs:
   source-contracts:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Validate source and workflow contracts
         run: ./validate_static.sh
       - name: Run MIM argument and containment tests

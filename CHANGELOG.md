@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Restored Linux executable metadata on every maintained shell entry point so
+  fresh GitHub and Unix checkouts can run validation, build, diagnostic, and
+  update scripts directly. Repository CI now uses the current Node 24-based
+  `actions/checkout@v7` action.
 - Added narrowly scoped compatibility for SageTV's historical imported-video
   thumbnail command on FFmpeg 9. Recognized thumbnail jobs now discard the
   removed `-minpixvar`/`-minpixnumframes`/`-minpixenergy` switches, translate

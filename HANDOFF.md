@@ -26,6 +26,9 @@ It is staged only in the isolated Vibe server appdata; the previous wrapper is
 recoverable from `.component-backups/mim-thumbnail-crop-20260909-1222`.
 Physical SageTV commissioning awaits a normal restart of `.232`; stock `.175`
 was not modified and remains the primary Android compatibility baseline.
+All maintained shell entry points carry executable Git metadata. Keep those
+mode bits intact so fresh Linux and GitHub Actions checkouts can invoke the
+scripts directly; repository CI uses `actions/checkout@v7`.
 
 The 2026-09-05 clean target rebuild produced Linux `ffmpeg.real` SHA-256
 `3e77761abc5a430f8ff43041255e7612e6c988ced373697e4772a79686634ae0`
