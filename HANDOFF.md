@@ -38,6 +38,15 @@ initial Push data; FF, REW, and pause/resume recovered in 573, 330, and 328 ms.
 The source MKV and stock `.175` server were not modified. Screenshot evidence
 is retained by the Android project as
 `artifacts/firetv/20260910-024426_mim-mkv-remux-playback-restored.png`.
+The revisioned component package
+`opensagetv-vibe-mim-4741072da29b.tar.gz` was then installed through the guarded
+component updater on `.232`; its archive SHA-256 is
+`655809234f1aeb16c69c97bb56619c5822f389c78eab781bf861deeca64a9da0` and its
+rollback backup is `.component-backups/mim-20260910-025236`. A post-install
+physical run again passed startup, single FF (334 ms), single REW (327 ms), a
+16-command mixed FF/REW stress sequence (364 ms), pause, and resume with the
+hardware AVC decoder, valid surface, advancing video/audio output, and no
+player error.
 The final unified-build SHA-256 values are
 `de3f724c661027d668c5f5d39553f09d0fff29c1b87c917d190b6700c50ba883`
 for Linux `ffmpeg_MIM`,

@@ -19,6 +19,12 @@
   video, advancing audio/video counters, nonzero Push media, and no player
   error. FF, REW, and pause/resume recovered in 573/330/328 ms. The original
   MKV was not remuxed or repaired on disk.
+- `[PASS]` revisioned package `opensagetv-vibe-mim-4741072da29b.tar.gz`
+  installed through the guarded component updater with archive SHA-256
+  `655809234f1aeb16c69c97bb56619c5822f389c78eab781bf861deeca64a9da0`.
+  The post-install physical suite passed startup, single FF/REW recovery in
+  334/327 ms, one 16-command mixed stress recovery in 364 ms, pause, and
+  resume. The decoder remained hardware AVC and both audio and video advanced.
 
 ## Current non-Android and physical validation (2026-08-30)
 
