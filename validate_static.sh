@@ -59,8 +59,8 @@ grep -q 'MIM_NAME=SageTVTranscoder.exe' "$ROOT/code/docker/build_target_unified.
 # Runtime Docker checks belong to the separate opensagetv-vibe-container project.
 # This repository validates only FFmpeg/MIM source, configuration, and output.
 
-# v0.4.8 keeps containment and adds an explicit DVD VM stream-transform contract.
-grep -q 'MIM_VERSION = "0.4.8"' "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp"
+# v0.4.9 keeps containment and restores stock FormatParser stream syntax.
+grep -q 'MIM_VERSION = "0.4.9"' "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp"
 grep -q -- '--mim-capabilities' "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp"
 grep -q -- '-sagetvdiscstream' "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp"
 grep -q 'qsv:hw,child_device=' "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp"
@@ -89,6 +89,7 @@ grep -q 'control: parent signal=' "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp"
 
 grep -q 'has_flag(a,"-dumpmetadata")' "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp"
 grep -q 'compat: SageTV -dumpmetadata' "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp"
+grep -q 'legacy_sagetv_metadata_line' "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp"
 grep -q 'compat: removed obsolete SageTV thumbnail frame-selection options' "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp"
 grep -q 'compat: translated legacy -vsync to -fps_mode' "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp"
 grep -q 'compat: translated legacy thumbnail -deinterlace to yadif' "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp"
@@ -100,4 +101,4 @@ grep -q 'log_name="./ffmpeg.real.log"' "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp"
 grep -q 'remove_opt_value(a,{"-vsync","-fps_mode"})' "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp"
 grep -q "does not contain the SageTV -sagetvratectrl patch marker" "$ROOT/code/docker/build_target_unified.sh"
 
-echo '[PASS] v0.4.8 FFmpeg/MIM static validation'
+echo '[PASS] v0.4.9 FFmpeg/MIM static validation'

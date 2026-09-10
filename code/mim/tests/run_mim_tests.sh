@@ -32,6 +32,16 @@ fi
 if [[ " $* " == *" -f lavfi "* && " $* " == *" -frames:v 1 "* ]]; then
   exit 0
 fi
+if [[ " $* " == *"/media/test.mkv"* ]]; then
+  cat >&2 <<'EOT'
+Input #0, matroska,webm, from '/tmp/media/test.mkv':
+  Duration: 02:09:14.33, start: 0.000000, bitrate: 2151 kb/s
+  Stream #0:0(eng): Video: h264 (High), yuv420p, 720x480 [SAR 32:27 DAR 16:9], 23.98 fps, 23.98 tbr
+  Stream #0:1(eng): Audio: ac3, 48000 Hz, 5.1(side), fltp, 448 kb/s
+  Stream #0:2(eng): Subtitle: dvd_subtitle
+EOT
+  exit 1
+fi
 printf 'FAKE_FFMPEG_ARGS:'
 printf ' <%s>' "$@"
 printf '\n'
@@ -62,11 +72,12 @@ sed -i 's/^preflight_hardware_encode=true$/preflight_hardware_encode=false/' "$T
 sed -i 's/^video_ready_gate=true$/video_ready_gate=false/' "$TMP/ffmpeg.real.ini"
 mkdir -p "$TMP/media"
 printf '\x47' > "$TMP/media/test.ts"
+printf '\x1a\x45\xdf\xa3' > "$TMP/media/test.mkv"
 
 v="$($TMP/ffmpeg --mim-version)"
-[[ "$v" == *"SageTV FFmpeg MIM 0.4.8"* ]]
+[[ "$v" == *"SageTV FFmpeg MIM 0.4.9"* ]]
 c="$($TMP/ffmpeg --mim-capabilities)"
-[[ "$c" == *'"mimVersion":"0.4.8"'* ]]
+[[ "$c" == *'"mimVersion":"0.4.9"'* ]]
 [[ "$c" == *'"dvdStreamTransform":true'* ]]
 s="$($TMP/ffmpeg --mim-status)"
 [[ "$s" == *'"activeJobs":[]'* ]]
@@ -90,7 +101,35 @@ d="$($TMP/ffmpeg --mim-dry-run -dumpmetadata -v 2 -i "$TMP/media/test.ts")"
 [[ "$d" == *"-loglevel info"* ]]
 [[ "$d" == *"-i $TMP/media/test.ts"* ]]
 [[ -f "$TMP/ffmpeg.real.log" ]]
-grep -q 'mim-start version=0.4.8' "$TMP/ffmpeg.real.log"
+grep -q 'mim-start version=0.4.9' "$TMP/ffmpeg.real.log"
+
+# Modern FFmpeg emits colon-delimited stream indexes. Stock SageTV's
+# FormatParser accepts the historical dot-delimited form, so only metadata
+# output must be adapted while preserving its container and duration text.
+set +e
+metadata="$($TMP/ffmpeg -dumpmetadata -v 2 -i "$TMP/media/test.mkv" 2>&1)"
+metadata_rc=$?
+set -e
+[[ $metadata_rc -eq 1 ]]
+[[ "$metadata" == *"Input #0, matroska,webm, from"* ]]
+[[ "$metadata" == *"Duration: 02:09:14.33"* ]]
+[[ "$metadata" == *"Stream #0.0(eng): Video: h264"* ]]
+[[ "$metadata" == *"Stream #0.1(eng): Audio: ac3"* ]]
+[[ "$metadata" == *"Stream #0.2(eng): Subtitle: dvd_subtitle"* ]]
+[[ "$metadata" != *"Stream #0:0"* ]]
+
+# Metadata compatibility is a protocol requirement, not a logging feature.
+# Disabling child-stderr logging must therefore retain the adapter.
+cp "$TMP/ffmpeg.real.ini" "$TMP/ffmpeg.no-stderr-log.ini"
+sed -i 's/^log_ffmpeg_stderr=true$/log_ffmpeg_stderr=false/' "$TMP/ffmpeg.no-stderr-log.ini"
+set +e
+metadata="$(SAGETV_FFMPEG_MIM_INI="$TMP/ffmpeg.no-stderr-log.ini" \
+  "$TMP/ffmpeg" -dumpmetadata -v 2 -i "$TMP/media/test.mkv" 2>&1)"
+metadata_rc=$?
+set -e
+[[ $metadata_rc -eq 1 ]]
+[[ "$metadata" == *"Stream #0.0(eng): Video: h264"* ]]
+[[ "$metadata" != *"Stream #0:0"* ]]
 
 # SageTV's private thumbnail frame-selection switches were removed upstream.
 # MIM must drop their option/value pairs while preserving the ordinary MJPEG
@@ -250,6 +289,24 @@ d="$($TMP/ffmpeg --mim-dry-run -stdinctrl -i "$TMP/media/test.ts" -b:v 3M -g 250
 [[ "$d" != *"-g 250"* ]]
 [[ "$d" != *"-bf 2"* ]]
 [[ "$d" != *"-vf"* ]]
+
+# Stock MiniPlayer's imported-Matroska compatibility command omits -vcodec and
+# requests the historical DVD muxer. The no-trigger copy path must still apply
+# the configured dvd->MPEG-TS remux mapping; copied H.264 cannot be written to
+# a DVD program stream and used to produce a black player with zero media bytes.
+d="$($TMP/ffmpeg --mim-dry-run -v 3 -y -threads 2 -sn -vsync 1 -async 100 \
+  -stdinctrl -i "$TMP/media/test.mkv" -threads 5 -f dvd -b 2000000 -g 3 -bf 0 \
+  -acodec mp2 -ab 128000 -ar 48000 -ac 2 -s 352x240 -r 29.97 \
+  -map 0:0 -map 0:1 -)"
+[[ "$d" == *"backend=copy"* ]]
+[[ "$d" == *"-c:v copy"* ]]
+[[ "$d" == *"-c:a copy"* ]]
+[[ "$d" == *"-f mpegts"* ]]
+[[ "$d" != *"-f dvd"* ]]
+[[ "$d" != *"-fps_mode"* ]]
+[[ "$d" != *"-async"* ]]
+[[ "$d" != *"-s 352x240"* ]]
+[[ "$d" != *"-r 29.97"* ]]
 
 # Caption preservation deliberately keeps GPU filtering/encoding but decodes in
 # software because hardware MPEG-2 decode can drop A/53 frame side data.

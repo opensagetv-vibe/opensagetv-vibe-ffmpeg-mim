@@ -73,6 +73,50 @@ grep -q 'compat: translated legacy thumbnail -deinterlace to yadif' "$LOG"
 grep -q 'compat: translated legacy -vsync to -fps_mode passthrough' "$LOG"
 echo '[PASS] real FFmpeg legacy SageTV thumbnail compatibility'
 
+# SageTV's historical -dumpmetadata contract is textual. Verify the real
+# FFmpeg 9 child output is converted back to the stream-index syntax consumed
+# by stock SageTV's unchanged FormatParser, including a Matroska input.
+METADATA_MKV="$TMP/metadata-probe.mkv"
+"$REAL" -hide_banner -loglevel error -y -i "$SOURCE_30" -map 0 \
+  -c:v libx264 -preset ultrafast -c:a copy "$METADATA_MKV"
+set +e
+metadata_output="$(SAGETV_FFMPEG_MIM_INI="$INI" "$MIM" \
+  -dumpmetadata -v 2 -i "$METADATA_MKV" 2>&1)"
+metadata_rc=$?
+set -e
+[[ $metadata_rc -ne 127 ]]
+grep -q 'Input #0, matroska,webm, from' <<<"$metadata_output"
+grep -Eq 'Duration: 00:00:0[45][.]' <<<"$metadata_output"
+grep -q 'Stream #0.0' <<<"$metadata_output"
+grep -q 'Stream #0.1' <<<"$metadata_output"
+! grep -q 'Stream #0:0' <<<"$metadata_output"
+echo '[PASS] real FFmpeg stock SageTV metadata compatibility'
+
+# Exercise the exact stock MiniPlayer command shape that follows imported MKV
+# discovery. SageTV omits -vcodec and requests `-f dvd`; MIM's default copy
+# policy must remux the existing H.264/MP2 streams to MPEG-TS and emit real
+# media instead of asking modern FFmpeg for an invalid H.264 DVD stream.
+LEGACY_DVD_COPY="$TMP/stock-miniplayer-copy.ts"
+LEGACY_DVD_CONTROL="$TMP/stock-miniplayer-control.fifo"
+mkfifo "$LEGACY_DVD_CONTROL"
+exec 7<>"$LEGACY_DVD_CONTROL"
+SAGETV_FFMPEG_MIM_INI="$INI" "$MIM" \
+  -v 3 -y -threads 2 -sn -vsync 1 -async 100 -stdinctrl \
+  -i "$METADATA_MKV" -threads 5 -f dvd -b 2000000 -g 3 -bf 0 \
+  -acodec mp2 -ab 128000 -ar 48000 -ac 2 -s 352x240 -r 29.97 \
+  -map 0:0 -map 0:1 "$LEGACY_DVD_COPY" <"$LEGACY_DVD_CONTROL"
+exec 7>&-
+rm -f "$LEGACY_DVD_CONTROL"
+[[ -s "$LEGACY_DVD_COPY" ]]
+legacy_copy_streams="$($PROBE -v error -show_entries stream=codec_type,codec_name \
+  -of csv=p=0 "$LEGACY_DVD_COPY")"
+grep -q 'h264,video' <<<"$legacy_copy_streams"
+grep -q 'mp2,audio' <<<"$legacy_copy_streams"
+"$REAL" -hide_banner -loglevel error -i "$LEGACY_DVD_COPY" \
+  -map 0:v:0 -map 0:a:0 -f null -
+grep -q 'compat: SageTV copy-only format dvd -> mpegts' "$LOG"
+echo '[PASS] real FFmpeg stock MiniPlayer MKV remux compatibility'
+
 assert_media_integrity() {
   local media="$1" label="$2" minimum_video_packets="${3:-20}"
   local streams video_packets first_video first_audio

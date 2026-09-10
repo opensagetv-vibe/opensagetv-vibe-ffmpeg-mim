@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+- Added MIM 0.4.9 compatibility for SageTV's historical `-dumpmetadata`
+  contract on current FFmpeg. Metadata probes already replace the removed
+  private switch and force info logging; they now also translate only modern
+  `Stream #N:M` indexes back to the `Stream #N.M` syntax consumed by the
+  unchanged stock SageTV `FormatParser`. Linux and Windows use line-buffered
+  stderr adapters, ordinary playback/transcode output remains untouched, and
+  the adapter remains active when diagnostic child-stderr logging is disabled.
+- Passed fake-child and real FFmpeg 9 Matroska metadata tests, including
+  duration, H.264 video, AC3 audio, and DVD-subtitle discovery. A full physical
+  reindex on the isolated Vibe server restored `Beauty And The Beast.mkv`
+  without rewriting it: SageTV changed from zero duration/streams to 2:09:14,
+  2151 kbps, H.264, two AC3 tracks, and DVD subtitles. Other imported MKV/AVI
+  entries were restored through the same normal metadata path; stock `.175`
+  and all media bytes were left unchanged.
+- Fixed the matching stock MiniPlayer playback command that follows imported
+  MKV discovery. When SageTV omitted `-vcodec` and requested its historical
+  `-f dvd` transport, the no-trigger copy path previously retained that DVD
+  muxer and FFmpeg rejected copied H.264 before emitting media. MIM now applies
+  its established DVD-to-MPEG-TS remux mapping on that path and removes legacy
+  `-vsync`/`-async` controls that are incompatible with stream copy. A real
+  FFmpeg test emits and fully decodes H.264/audio MPEG-TS, and physical Media3
+  hardware playback on `.25` against isolated `.232` passed startup, FF, REW,
+  pause/resume, and visible-video verification without changing the MKV.
 - Restored Linux executable metadata on every maintained shell entry point so
   fresh GitHub and Unix checkouts can run validation, build, diagnostic, and
   update scripts directly. Repository CI now uses the current Node 24-based

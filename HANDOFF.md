@@ -6,12 +6,47 @@ Read `AGENTS.md`, `README.md`, `TASKS.md`, and `WORKFLOW.md`, then use the commo
 root commands. Changed-files packages live in `artifacts/downloads`. Install
 means the non-Android MIM test suite and never enables MIM by default.
 
-Current state: MIM 0.4.8 and FFmpeg `n9.0.1` build successfully for Linux amd64
+Current state: MIM 0.4.9 and FFmpeg `n9.0.1` build successfully for Linux amd64
 and Windows amd64 in the single `opensagetv-vibe-dev` environment. Generated
 artifacts and checksums live under `output/<target>` and are not committed.
 The Linux/Windows toolchain Docker stages are owned by
 `opensagetv-vibe-build-env`; this repository has no standalone Docker image or
 container lifecycle.
+
+MIM 0.4.9 restores the stock SageTV metadata-parser contract with current
+FFmpeg. SageTV still sends its private `-dumpmetadata -v 2 -i FILE` command;
+MIM removes the unavailable switch, forces FFmpeg info output, and converts
+only stream-index delimiters from `Stream #N:M` to `Stream #N.M`. Both target
+platforms buffer partial stderr lines, and Linux captures metadata stderr even
+when normal FFmpeg stderr logging is disabled. Real FFmpeg 9 integration and
+the full lifecycle/media suite pass. On the isolated `.232` server, a normal
+full reindex restored the unmodified `Beauty And The Beast.mkv` as Matroska,
+2:09:14, 2151 kbps, H.264, two AC3 tracks, and DVD subtitles. The guarded MIM
+component installer set mode 0755, recorded a rollback backup, restarted only
+the Vibe container, and passed its in-container status check. Stock `.175` was
+not modified.
+
+The matching stock MiniPlayer MKV playback failure is also corrected. SageTV's
+legacy Push command omits `-vcodec` and requests `-f dvd`; the default copy
+branch used to return before the existing DVD-to-MPEG-TS mapping, causing
+FFmpeg to reject copied H.264 with return code 234 and emit zero bytes. The
+mapping now applies to both copy branches, while `-fps_mode`/`-async` are
+removed from stream-copy jobs. Real FFmpeg H.264/audio remux and full decode
+pass. On `.25` against isolated `.232`, `Beauty And The Beast.mkv` visibly
+rendered through Media3 hardware AVC, with advancing audio/video and 42 MB of
+initial Push data; FF, REW, and pause/resume recovered in 573, 330, and 328 ms.
+The source MKV and stock `.175` server were not modified. Screenshot evidence
+is retained by the Android project as
+`artifacts/firetv/20260910-024426_mim-mkv-remux-playback-restored.png`.
+The final unified-build SHA-256 values are
+`de3f724c661027d668c5f5d39553f09d0fff29c1b87c917d190b6700c50ba883`
+for Linux `ffmpeg_MIM`,
+`0f925398bb48c83c31bf8f9f7673c6c4450b770b720210a2065b5b803db1d856`
+for Linux `ffmpeg.real`,
+`bb717817cd5ab27e98d9a5a73dede85c48c8eb3561426def295b2c73d43f579e`
+for Windows `SageTVTranscoder.exe`, and
+`23e00040fdcc07e5e7dd6b4d70b59e5e233b5b2155cdfb20ecb1d0d66b7722e9`
+for Windows `ffmpeg.real.exe`.
 
 The 2026-09-09 stock-era thumbnail compatibility work passes native/static and
 real FFmpeg 9 integration. The exact SageTV command, including private

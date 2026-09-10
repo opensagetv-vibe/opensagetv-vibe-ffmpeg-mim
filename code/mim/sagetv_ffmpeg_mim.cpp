@@ -42,7 +42,7 @@ static_assert(sizeof(void*) == 8, "SageTV FFmpeg MIM supports Windows x64 only."
 
 namespace fs = std::filesystem;
 
-static constexpr const char* MIM_VERSION = "0.4.8";
+static constexpr const char* MIM_VERSION = "0.4.9";
 
 static std::string trim(std::string s) {
     auto is_ws = [](unsigned char c){ return std::isspace(c) != 0; };
@@ -57,6 +57,46 @@ static std::string lower(std::string s) {
 }
 
 static bool ieq(const std::string& a, const std::string& b) { return lower(a) == lower(b); }
+
+// SageTV's Java FormatParser consumes the text emitted by its historical
+// FFmpeg fork. Current FFmpeg separates input and stream indexes with a colon
+// ("Stream #0:1"), while the stock parser deliberately matches the old dot
+// form ("Stream #0.1"). Translate only that delimiter in -dumpmetadata
+// output; ordinary FFmpeg/transcode stderr must remain byte-for-byte intact.
+static std::string legacy_sagetv_metadata_line(std::string line) {
+    size_t search=0;
+    while((search=line.find("Stream #",search))!=std::string::npos) {
+        size_t p=search+8;
+        while(p<line.size() && std::isdigit((unsigned char)line[p])) ++p;
+        if(p>=line.size() || line[p]!=':') { search=p; continue; }
+        size_t stream=p+1;
+        if(stream>=line.size() || !std::isdigit((unsigned char)line[stream])) { search=stream; continue; }
+        line[p]='.';
+        search=stream;
+    }
+    return line;
+}
+
+static std::string adapt_sagetv_metadata_chunk(std::string& pending,
+                                                const char* data, size_t size,
+                                                bool finish=false) {
+    if(data && size) pending.append(data,size);
+    std::string out;
+    size_t consumed=0;
+    for(;;) {
+        size_t nl=pending.find('\n',consumed);
+        if(nl==std::string::npos) break;
+        out+=legacy_sagetv_metadata_line(pending.substr(consumed,nl-consumed));
+        out+='\n';
+        consumed=nl+1;
+    }
+    if(consumed) pending.erase(0,consumed);
+    if(finish && !pending.empty()) {
+        out+=legacy_sagetv_metadata_line(pending);
+        pending.clear();
+    }
+    return out;
+}
 
 static bool parse_bool(const std::string& v, bool def=false) {
     const auto x = lower(trim(v));
@@ -791,6 +831,7 @@ static void force_stream_copy(std::vector<std::string>& a, const Ini& ini) {
             {"-b","-b:v"},{"-maxrate","-maxrate:v"},{"-bufsize","-bufsize:v"},
             {"-g"},{"-bf"},{"-preset"},{"-profile:v"},{"-level:v"},{"-crf"},
             {"-q:v","-qscale:v"},{"-s"},{"-vf","-filter:v"},{"-pix_fmt"},{"-r"},
+            {"-fps_mode"},{"-async"},
             {"-b:a","-ab"},{"-ar"},{"-ac"},{"-af","-filter:a"}}) {
         remove_opt_value(a,aliases);
     }
@@ -798,6 +839,26 @@ static void force_stream_copy(std::vector<std::string>& a, const Ini& ini) {
         set_output_opt(a,{"-vcodec","-c:v","-codec:v"},"-c:v","copy");
     if(ini.get_bool("copy_default","audio",true))
         set_output_opt(a,{"-acodec","-c:a","-codec:a"},"-c:a","copy");
+}
+
+static bool apply_copy_only_format_mapping(std::vector<std::string>& a,
+                                           const std::vector<std::string>& original,
+                                           const Ini& ini,
+                                           Logger& log) {
+    auto requested_format=get_output_opt_value(original,{"-f"});
+    auto copy_trigger=trim(ini.get("general","copy_only_format_trigger","dvd"));
+    if(!requested_format || copy_trigger.empty() || !ieq(*requested_format,copy_trigger))
+        return false;
+
+    set_output_opt(a,{"-vcodec","-c:v","-codec:v"},"-c:v",
+                   ini.get("copy_only","video_codec","copy"));
+    set_output_opt(a,{"-acodec","-c:a","-codec:a"},"-c:a",
+                   ini.get("copy_only","audio_codec","copy"));
+    auto output_format=ini.get("copy_only","output_format","mpegts");
+    set_output_opt(a,{"-f"},"-f",output_format);
+    log.log("compat: SageTV copy-only format ",*requested_format,
+            " -> ",output_format);
+    return true;
 }
 
 static std::vector<std::string> rewrite_args(const Ini& ini, const PlatformInfo& p, const fs::path& exe_dir,
@@ -922,6 +983,14 @@ static std::vector<std::string> rewrite_args(const Ini& ini, const PlatformInfo&
         if(sagetv_job && action=="copy") {
             backend="copy";
             force_stream_copy(a,ini);
+            // Stock MiniPlayer can omit -vcodec on its legacy `-f dvd`
+            // transcode command. That is still a copy/remux candidate under
+            // the configured policy, but modern FFmpeg cannot mux copied
+            // H.264 into a DVD program stream. Apply the established
+            // dvd->mpegts compatibility mapping before returning. Previously
+            // this mapping was reachable only when a video-codec trigger was
+            // present, so the stock command exited before emitting any bytes.
+            apply_copy_only_format_mapping(a,original,ini,log);
             log.log("policy: SageTV job did not match a transcode trigger -> stream copy");
             return a;
         }
@@ -955,13 +1024,8 @@ static std::vector<std::string> rewrite_args(const Ini& ini, const PlatformInfo&
     remove_flag(a,"-deinterlace");
 
     // Preserve the original helper script's DVD/remux shortcut.
-    auto requested_format=get_output_opt_value(original,{"-f"});
-    auto copy_trigger=trim(ini.get("general","copy_only_format_trigger","dvd"));
-    if(requested_format && !copy_trigger.empty() && ieq(*requested_format,copy_trigger)) {
+    if(apply_copy_only_format_mapping(a,original,ini,log)) {
         backend="copy";
-        set_output_opt(a,{"-vcodec","-c:v","-codec:v"},"-c:v",ini.get("copy_only","video_codec","copy"));
-        set_output_opt(a,{"-acodec","-c:a","-codec:a"},"-c:a",ini.get("copy_only","audio_codec","copy"));
-        set_output_opt(a,{"-f"},"-f",ini.get("copy_only","output_format","mpegts"));
         return a;
     }
 
@@ -1312,7 +1376,8 @@ static volatile sig_atomic_t g_mim_parent_signal = 0;
 static void mim_parent_signal_handler(int sig) { g_mim_parent_signal = sig; }
 
 static int run_child_posix(const fs::path& exe, const std::vector<std::string>& args,
-                           const ControlConfig& cc, Logger& log, bool log_stderr) {
+                           const ControlConfig& cc, Logger& log, bool log_stderr,
+                           bool legacy_metadata_output) {
     // The MIM must survive a child closing its stdin or SageTV closing an
     // inherited pipe.  Restore normal SIGPIPE semantics in ffmpeg.real after
     // fork so a broken MiniPlayer output pipe terminates FFmpeg, not the MIM.
@@ -1326,9 +1391,17 @@ static int run_child_posix(const fs::path& exe, const std::vector<std::string>& 
     if(pipe(pin)!=0){ log.log("ERROR stdin pipe failed errno=",errno); sigaction(SIGPIPE,&old_sigpipe,nullptr); return 127; }
 
     int perr[2]={-1,-1};
-    if(log_stderr && pipe(perr)!=0) {
+    bool capture_stderr=log_stderr || legacy_metadata_output;
+    if(capture_stderr && pipe(perr)!=0) {
+        if(legacy_metadata_output) {
+            log.log("ERROR metadata stderr adapter pipe failed errno=",errno);
+            close(pin[0]); close(pin[1]);
+            sigaction(SIGPIPE,&old_sigpipe,nullptr);
+            return 127;
+        }
         log.log("WARNING stderr capture pipe failed errno=",errno,"; inheriting stderr");
         log_stderr=false;
+        capture_stderr=false;
     }
 
     // Record the MIM PID before fork. On Linux, ffmpeg.real arms a parent-death
@@ -1365,7 +1438,7 @@ static int run_child_posix(const fs::path& exe, const std::vector<std::string>& 
 
         dup2(pin[0],STDIN_FILENO);
         close(pin[0]); close(pin[1]);
-        if(log_stderr) {
+        if(capture_stderr) {
             close(perr[0]);
             dup2(perr[1],STDERR_FILENO);
             close(perr[1]);
@@ -1399,13 +1472,13 @@ static int run_child_posix(const fs::path& exe, const std::vector<std::string>& 
     sigaction(SIGQUIT,&parent_sa,&old_sigquit);
 
     close(pin[0]);
-    if(log_stderr) {
+    if(capture_stderr) {
         close(perr[1]);
         fcntl(perr[0],F_SETFL,fcntl(perr[0],F_GETFL,0)|O_NONBLOCK);
     }
     fcntl(STDIN_FILENO,F_SETFL,fcntl(STDIN_FILENO,F_GETFL,0)|O_NONBLOCK);
 
-    std::string buf, errbuf;
+    std::string buf, errbuf, metadata_pending;
     bool stdin_open=true, child_stdin_open=true, kill_escalated=false, parent_signal_logged=false;
     int status=0;
     std::optional<std::chrono::steady_clock::time_point> terminate_requested;
@@ -1474,20 +1547,26 @@ static int run_child_posix(const fs::path& exe, const std::vector<std::string>& 
         }
     };
     auto drain_stderr=[&](){
-        if(!log_stderr) return;
+        if(!capture_stderr) return;
         char tmp[4096];
         for(;;) {
             ssize_t n=read(perr[0],tmp,sizeof(tmp));
             if(n>0) {
-                // Preserve the exact child stderr stream for SageTV/console consumers.
+                // Preserve normal child stderr exactly. Metadata probes alone
+                // receive the legacy stream-index delimiter SageTV parses.
+                std::string forwarded=legacy_metadata_output
+                    ? adapt_sagetv_metadata_chunk(metadata_pending,tmp,(size_t)n)
+                    : std::string(tmp,(size_t)n);
                 ssize_t off=0;
-                while(off<n) {
-                    ssize_t w=write(STDERR_FILENO,tmp+off,(size_t)(n-off));
+                while(off<(ssize_t)forwarded.size()) {
+                    ssize_t w=write(STDERR_FILENO,forwarded.data()+off,forwarded.size()-(size_t)off);
                     if(w<=0) break;
                     off+=w;
                 }
-                errbuf.append(tmp,(size_t)n);
-                log_err_lines();
+                if(log_stderr) {
+                    errbuf.append(forwarded);
+                    log_err_lines();
+                }
                 continue;
             }
             break;
@@ -1497,7 +1576,7 @@ static int run_child_posix(const fs::path& exe, const std::vector<std::string>& 
     for(;;){
         struct pollfd pfds[2]; nfds_t nfds=0; int stdin_idx=-1, err_idx=-1;
         if(stdin_open) { stdin_idx=(int)nfds; pfds[nfds++]={STDIN_FILENO,POLLIN|POLLHUP,0}; }
-        if(log_stderr) { err_idx=(int)nfds; pfds[nfds++]={perr[0],POLLIN|POLLHUP,0}; }
+        if(capture_stderr) { err_idx=(int)nfds; pfds[nfds++]={perr[0],POLLIN|POLLHUP,0}; }
         int pr=poll(pfds,nfds,100);
         if(pr>0 && stdin_idx>=0) {
             auto re=pfds[stdin_idx].revents;
@@ -1573,10 +1652,22 @@ static int run_child_posix(const fs::path& exe, const std::vector<std::string>& 
         }
     }
     if(child_stdin_open && pin[1]>=0) close(pin[1]);
-    if(log_stderr) {
+    if(capture_stderr) {
         drain_stderr();
+        if(legacy_metadata_output) {
+            auto tail=adapt_sagetv_metadata_chunk(metadata_pending,nullptr,0,true);
+            if(!tail.empty()) {
+                ssize_t off=0;
+                while(off<(ssize_t)tail.size()) {
+                    ssize_t w=write(STDERR_FILENO,tail.data()+off,tail.size()-(size_t)off);
+                    if(w<=0) break;
+                    off+=w;
+                }
+                if(log_stderr) errbuf.append(tail);
+            }
+        }
         close(perr[0]);
-        if(!errbuf.empty()) log.log("ffmpeg-stderr: ",errbuf);
+        if(log_stderr && !errbuf.empty()) log.log("ffmpeg-stderr: ",errbuf);
     }
     sigaction(SIGTERM,&old_sigterm,nullptr);
     sigaction(SIGINT,&old_sigint,nullptr);
@@ -1603,7 +1694,9 @@ static std::wstring widen(const std::string& s){
     return w;
 }
 static std::wstring quote_win(const std::wstring& s){ if(s.find_first_of(L" \t\"")==std::wstring::npos)return s; std::wstring r=L"\""; unsigned bs=0; for(wchar_t c:s){ if(c==L'\\'){bs++;continue;} if(c==L'\"'){r.append(bs*2+1,L'\\');r+=L'\"';bs=0;continue;} r.append(bs,L'\\');bs=0;r+=c;} r.append(bs*2,L'\\');r+=L'\"'; return r; }
-static int run_child_windows(const fs::path& exe,const std::vector<std::string>& args,const ControlConfig& cc,Logger& log){
+static int run_child_windows(const fs::path& exe,const std::vector<std::string>& args,
+                             const ControlConfig& cc,Logger& log,
+                             bool legacy_metadata_output){
     SECURITY_ATTRIBUTES sa{sizeof(sa),nullptr,TRUE};
     HANDLE rd=nullptr,wr=nullptr;
     if(!CreatePipe(&rd,&wr,&sa,0))return 127;
@@ -1612,12 +1705,50 @@ static int run_child_windows(const fs::path& exe,const std::vector<std::string>&
     std::wstring cmd=quote_win(exe.wstring());
     for(auto&a:args)cmd+=L" "+quote_win(widen(a));
     std::vector<wchar_t> mutable_cmd(cmd.begin(),cmd.end()); mutable_cmd.push_back(0);
+    HANDLE err_rd=nullptr,err_wr=nullptr;
+    if(legacy_metadata_output) {
+        if(!CreatePipe(&err_rd,&err_wr,&sa,0)) {
+            CloseHandle(rd); CloseHandle(wr); return 127;
+        }
+        SetHandleInformation(err_rd,HANDLE_FLAG_INHERIT,0);
+    }
     STARTUPINFOW si{}; si.cb=sizeof(si); si.dwFlags=STARTF_USESTDHANDLES;
-    si.hStdInput=rd; si.hStdOutput=GetStdHandle(STD_OUTPUT_HANDLE); si.hStdError=GetStdHandle(STD_ERROR_HANDLE);
+    si.hStdInput=rd; si.hStdOutput=GetStdHandle(STD_OUTPUT_HANDLE);
+    si.hStdError=legacy_metadata_output?err_wr:GetStdHandle(STD_ERROR_HANDLE);
     PROCESS_INFORMATION pi{};
     BOOL ok=CreateProcessW(exe.wstring().c_str(),mutable_cmd.data(),nullptr,nullptr,TRUE,0,nullptr,exe.parent_path().wstring().c_str(),&si,&pi);
     CloseHandle(rd);
-    if(!ok){CloseHandle(wr);log.log("ERROR CreateProcess failed code=",GetLastError());return 127;}
+    if(err_wr) CloseHandle(err_wr);
+    if(!ok){CloseHandle(wr);if(err_rd)CloseHandle(err_rd);log.log("ERROR CreateProcess failed code=",GetLastError());return 127;}
+
+    std::thread metadata_thread;
+    if(legacy_metadata_output) {
+        metadata_thread=std::thread([err_rd,&log](){
+            std::string pending;
+            char tmp[4096]; DWORD n=0;
+            HANDLE parent_stderr=GetStdHandle(STD_ERROR_HANDLE);
+            while(ReadFile(err_rd,tmp,(DWORD)sizeof(tmp),&n,nullptr) && n>0) {
+                auto forwarded=adapt_sagetv_metadata_chunk(pending,tmp,(size_t)n);
+                if(!forwarded.empty()) {
+                    DWORD off=0;
+                    while(off<forwarded.size()) {
+                        DWORD written=0;
+                        if(!WriteFile(parent_stderr,forwarded.data()+off,
+                                      (DWORD)(forwarded.size()-off),&written,nullptr) || written==0) break;
+                        off+=written;
+                    }
+                    log.log("ffmpeg-metadata: ",trim(forwarded));
+                }
+            }
+            auto tail=adapt_sagetv_metadata_chunk(pending,nullptr,0,true);
+            if(!tail.empty()) {
+                DWORD written=0;
+                WriteFile(parent_stderr,tail.data(),(DWORD)tail.size(),&written,nullptr);
+                log.log("ffmpeg-metadata: ",trim(tail));
+            }
+            CloseHandle(err_rd);
+        });
+    }
 
     HANDLE hin=GetStdHandle(STD_INPUT_HANDLE);
     std::string buf;
@@ -1673,6 +1804,7 @@ static int run_child_windows(const fs::path& exe,const std::vector<std::string>&
         }
     }
     DWORD rc=1; GetExitCodeProcess(pi.hProcess,&rc);
+    if(metadata_thread.joinable()) metadata_thread.join();
     if(wr!=nullptr) CloseHandle(wr);
     CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
     return (int)rc;
@@ -1798,9 +1930,10 @@ int main(int argc,char** argv){
     ControlConfig cc; cc.enabled=stdinctrl&&ini.get_bool("stdinctrl","enabled",true); cc.case_insensitive=ini.get_bool("stdinctrl","case_insensitive",true); cc.rate_enabled=has_flag(final_args,"-sagetvratectrl"); cc.rate_mode=lower(ini.get("stdinctrl","videorateadapt_mode","forward")); cc.inactive_action=lower(ini.get("active_file","inactivefile_action","terminate_child")); cc.active=active; cc.isolate_child_process=ini.get_bool("safety","isolate_child_process",true); cc.terminate_grace_ms=ini.get_ll("safety","terminate_grace_ms",2000);
     for(auto s:split_csv(ini.get("stdinctrl","stop_commands","STOP,QUIT,Q")))cc.stop.insert(cc.case_insensitive?lower(s):s);
 #ifdef _WIN32
-    int rc=run_child_windows(real,final_args,cc,log);
+    int rc=run_child_windows(real,final_args,cc,log,backend=="metadata");
 #else
-    int rc=run_child_posix(real,final_args,cc,log,ini.get_bool("logging","log_ffmpeg_stderr",true));
+    int rc=run_child_posix(real,final_args,cc,log,
+        ini.get_bool("logging","log_ffmpeg_stderr",true),backend=="metadata");
 #endif
     log.log("child exit rc=",rc);
     const auto stopped_status=mim_status_record(platform.name,mim_pid,"stopped",backend,

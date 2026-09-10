@@ -93,7 +93,7 @@ echo "================================================================"
   --ar="${AR:-ar}" \
   --ranlib="${RANLIB:-ranlib}" \
   --nm="${NM:-nm}" \
-  --extra-version="sagetv-mim-v0.4.8" \
+  --extra-version="sagetv-mim-v0.4.9" \
   || { cat ffbuild/config.log; exit 1; }
 
 JOBS="${BUILD_JOBS:-0}"
@@ -132,7 +132,7 @@ else
 fi
 
 {
-  echo "SageTV FFmpeg MIM v0.4.8"
+  echo "SageTV FFmpeg MIM v0.4.9"
   echo "build_environment=${OPENSAGETV_VIBE_BUILD_ENV_VERSION:-unknown}"
   echo "ffmpeg_toolchain=${OPENSAGETV_VIBE_FFMPEG_TOOLCHAIN:-unknown}"
   echo "target=$TARGET_ID"

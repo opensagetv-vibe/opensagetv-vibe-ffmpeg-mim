@@ -1,4 +1,24 @@
-# Test Results — v0.4.7
+# Test Results — v0.4.9
+
+## Stock SageTV metadata compatibility (2026-09-09)
+
+- `[PASS]` fake-child Linux coverage converts video, audio, and subtitle
+  indexes from modern colon syntax to SageTV's historical dot syntax.
+- `[PASS]` the metadata adapter remains enabled when ordinary child-stderr
+  diagnostic logging is disabled.
+- `[PASS]` real FFmpeg 9 Matroska probing returns container, duration, video,
+  and audio data in the exact syntax accepted by the unchanged SageTV parser.
+- `[PASS]` the complete init, mapping, teardown, crash-containment,
+  completed/growing/join, repeated-switch, decode-integrity, and orphan suite.
+- `[PASS]` isolated `.232` full-library physical reindex. The unmodified
+  `Beauty And The Beast.mkv` was restored to 2:09:14 with H.264, two AC3
+  tracks, and DVD subtitles; the stock `.175` server was not changed.
+- `[PASS]` exact stock MiniPlayer no-`-vcodec`, `-f dvd` command is rewritten
+  to H.264/audio stream copy in MPEG-TS; the real output fully decodes.
+- `[PASS]` physical `.25` Media3 hardware startup against `.232`: visible H.264
+  video, advancing audio/video counters, nonzero Push media, and no player
+  error. FF, REW, and pause/resume recovered in 573/330/328 ms. The original
+  MKV was not remuxed or repaired on disk.
 
 ## Current non-Android and physical validation (2026-08-30)
 
