@@ -738,6 +738,103 @@ static std::string choose_backend(const Ini& ini, const PlatformInfo& p, const f
     return "unavailable";
 }
 
+static std::string first_line(std::string text) {
+    const auto newline=text.find_first_of("\r\n");
+    if(newline!=std::string::npos) text.resize(newline);
+    return trim(text);
+}
+
+// Report one authoritative capability snapshot for the Standard plugin and
+// STVi. Keep detection here beside backend selection so the UI cannot drift
+// into claiming hardware is usable when MIM will actually choose software.
+static void print_mim_capabilities(const fs::path& executable_dir, const Ini& ini,
+                                   const PlatformInfo& platform, const fs::path& real,
+                                   Logger& log) {
+    const fs::path cache=executable_dir/"cache"/"capabilities";
+    const bool real_present=native_file_exists(real);
+    const auto caps=real_present ? load_capabilities(real,cache,log) : std::string();
+    auto encoder=[](const std::string& backend) {
+        if(backend=="software") return std::string("libx264");
+        if(backend=="d3d12va") return std::string("h264_d3d12va");
+        return std::string("h264_")+backend;
+    };
+    auto compiled=[&](const std::string& backend) {
+        const auto name=encoder(backend);
+        return !name.empty() && caps.find(name)!=std::string::npos;
+    };
+    auto device_present=[&](const std::string& backend) {
+        if(backend=="software") return true;
+#ifdef _WIN32
+        // Windows has no bounded device enumerator yet. Encoder presence is
+        // the same conservative proxy used by the existing Windows selector;
+        // preflight remains explicitly null below rather than claiming it ran.
+        if(backend=="vaapi") return false;
+        return compiled(backend);
+#else
+        if(backend=="qsv") return linux_has_vendor("0x8086");
+        if(backend=="nvenc") return fs::exists("/dev/nvidiactl")||fs::exists("/dev/nvidia0");
+        if(backend=="vaapi") return linux_has_vendor("0x8086")||linux_has_vendor("0x1002");
+        return false;
+#endif
+    };
+
+    struct State {
+        std::string name;
+        std::string encoder;
+        bool compiled=false;
+        bool device=false;
+        // -1 means the platform has no bounded preflight implementation.
+        int preflight=-1;
+        bool usable=false;
+    };
+    std::vector<State> states;
+    for(const auto& name: {std::string("vaapi"),std::string("qsv"),std::string("nvenc"),
+                           std::string("amf"),std::string("d3d12va"),std::string("software")}) {
+        State state;
+        state.name=name;
+        state.encoder=encoder(name);
+        state.compiled=real_present && compiled(name);
+        state.device=real_present && device_present(name);
+        if(name=="software") state.preflight=state.compiled ? 1 : 0;
+#ifndef _WIN32
+        else state.preflight=(state.compiled && state.device &&
+            hardware_encode_preflight(ini,real,cache,log,name,state.encoder)) ? 1 : 0;
+#endif
+        state.usable=state.compiled && state.device &&
+            (name=="software" || state.preflight==1 || state.preflight==-1);
+        if(platform.name=="windows-x64" && name=="vaapi") state.usable=false;
+        if(platform.name=="linux-x64" && (name=="amf" || name=="d3d12va")) state.usable=false;
+        states.push_back(state);
+    }
+
+    std::string ffmpeg_version;
+    if(real_present) {
+        const auto version=run_capture(real,{"-version"});
+        if(version.first==0) ffmpeg_version=first_line(version.second);
+    }
+    const auto selected=real_present
+        ? choose_backend(ini,platform,real,cache,log,"h264",true)
+        : std::string("unavailable");
+
+    std::cout << "{\"mimVersion\":\"" << json_escape(MIM_VERSION)
+              << "\",\"platform\":\"" << json_escape(platform.name)
+              << "\",\"ffmpegVersion\":\"" << json_escape(ffmpeg_version)
+              << "\",\"selectedBackend\":\"" << json_escape(selected)
+              << "\",\"dvdStreamTransform\":true,\"dvdVideoDemux\":true,\"backends\":{";
+    for(size_t index=0;index<states.size();++index) {
+        const auto& state=states[index];
+        if(index) std::cout << ',';
+        std::cout << "\"" << state.name << "\":{\"encoder\":\"" << json_escape(state.encoder)
+                  << "\",\"compiled\":" << (state.compiled?"true":"false")
+                  << ",\"devicePresent\":" << (state.device?"true":"false")
+                  << ",\"preflight\":";
+        if(state.preflight<0) std::cout << "null";
+        else std::cout << (state.preflight?"true":"false");
+        std::cout << ",\"usable\":" << (state.usable?"true":"false") << "}";
+    }
+    std::cout << "}}\n";
+}
+
 static std::string codec_for_backend(const Ini& ini, const std::string& b, const std::string& family) {
     const auto key="codec_"+family+"_"+b;
     if(family=="hevc") {
@@ -1865,13 +1962,9 @@ int main(int argc,char** argv){
         std::cout << "SageTV FFmpeg MIM " << MIM_VERSION << " (" << platform.name << ")\n";
         return 0;
     }
-    if(argc>=2 && std::string(argv[1])=="--mim-capabilities") {
-        std::cout << "{\"mimVersion\":\"" << MIM_VERSION
-                  << "\",\"dvdStreamTransform\":true,\"dvdVideoDemux\":true}\n";
-        return 0;
-    }
     bool dry_run = argc>=2 && std::string(argv[1])=="--mim-dry-run";
     bool status_query = argc>=2 && std::string(argv[1])=="--mim-status";
+    bool capabilities_query = argc>=2 && std::string(argv[1])=="--mim-capabilities";
     fs::path ini_path=dir/"ffmpeg.real.ini";
     if(const char* e=std::getenv("SAGETV_FFMPEG_MIM_INI")) ini_path=e;
     Ini ini; if(!ini.load(ini_path)){ std::cerr<<"SageTV FFmpeg MIM: cannot load "<<ini_path<<"\n"; return 78; }
@@ -1891,8 +1984,12 @@ int main(int argc,char** argv){
     fs::path log_path=log_name; if(log_path.is_relative())log_path=dir/log_path;
     Logger log; log.init(log_path,ini.get_bool("logging","enabled",true));
     log.log("mim-start version=",MIM_VERSION," platform=",platform.name);
-    if(!ini.get_bool("general","enabled",true)){ std::cerr<<"SageTV FFmpeg MIM is disabled in INI\n"; return 78; }
     auto real=resolve_config_path(dir,ini,platform,false), ffprobe=resolve_config_path(dir,ini,platform,true);
+    if(capabilities_query) {
+        print_mim_capabilities(dir,ini,platform,real,log);
+        return 0;
+    }
+    if(!ini.get_bool("general","enabled",true)){ std::cerr<<"SageTV FFmpeg MIM is disabled in INI\n"; return 78; }
     if(!native_file_exists(real)){ std::cerr<<"SageTV FFmpeg MIM: real FFmpeg not found: "<<real<<"\n"; log.log("ERROR real FFmpeg missing ",real.string()); return 127; }
     std::vector<std::string> orig; for(int i=dry_run?2:1;i<argc;++i)orig.emplace_back(argv[i]);
     // Administrators and container health checks commonly use GNU-style long

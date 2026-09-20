@@ -79,6 +79,46 @@ v="$($TMP/ffmpeg --mim-version)"
 c="$($TMP/ffmpeg --mim-capabilities)"
 [[ "$c" == *'"mimVersion":"0.4.9"'* ]]
 [[ "$c" == *'"dvdStreamTransform":true'* ]]
+python3 - "$c" <<'PY'
+import json
+import sys
+
+caps = json.loads(sys.argv[1])
+assert caps["platform"] == "linux-x64"
+assert caps["selectedBackend"] in {"qsv", "nvenc", "vaapi", "software", "unavailable"}
+assert "ffmpegVersion" in caps
+assert list(caps["backends"]) == ["vaapi", "qsv", "nvenc", "amf", "d3d12va", "software"]
+for name, state in caps["backends"].items():
+    assert set(state) == {"encoder", "compiled", "devicePresent", "preflight", "usable"}
+    assert isinstance(state["encoder"], str)
+    assert isinstance(state["compiled"], bool)
+    assert isinstance(state["devicePresent"], bool)
+    assert state["preflight"] is None or isinstance(state["preflight"], bool)
+    assert isinstance(state["usable"], bool)
+assert caps["backends"]["software"]["compiled"] is True
+assert caps["backends"]["software"]["devicePresent"] is True
+assert caps["backends"]["software"]["usable"] is True
+PY
+
+# Capability discovery must honor an alternate live INI, remain available
+# while MIM is disabled, and describe a missing real FFmpeg without crashing.
+cp "$TMP/ffmpeg.real.ini" "$TMP/disabled.ini"
+sed -i 's/^enabled=true$/enabled=false/' "$TMP/disabled.ini"
+c="$(SAGETV_FFMPEG_MIM_INI="$TMP/disabled.ini" "$TMP/ffmpeg" --mim-capabilities)"
+[[ "$c" == *'"mimVersion":"0.4.9"'* ]]
+mkdir -p "$TMP/missing-real"
+cp "$TMP/ffmpeg" "$TMP/missing-real/ffmpeg"
+cp "$TMP/ffmpeg.real.ini" "$TMP/missing-real/ffmpeg.real.ini"
+c="$($TMP/missing-real/ffmpeg --mim-capabilities)"
+python3 - "$c" <<'PY'
+import json
+import sys
+
+caps = json.loads(sys.argv[1])
+assert caps["ffmpegVersion"] == ""
+assert caps["selectedBackend"] == "unavailable"
+assert all(not state["usable"] for state in caps["backends"].values())
+PY
 s="$($TMP/ffmpeg --mim-status)"
 [[ "$s" == *'"activeJobs":[]'* ]]
 [[ "$s" == *'"lastJob":null'* ]]
