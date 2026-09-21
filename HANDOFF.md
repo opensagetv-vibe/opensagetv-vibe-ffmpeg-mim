@@ -13,6 +13,18 @@ The Linux/Windows toolchain Docker stages are owned by
 `opensagetv-vibe-build-env`; this repository has no standalone Docker image or
 container lifecycle.
 
+The optional DVD transform ownership is explicit. MIM continues to expose
+`dvdStreamTransform` through `--mim-capabilities` and implements
+`-sagetvdiscstream`; the sibling SageTV FFmpeg plugin is the only component
+that launches and manages that transform. Updated Core discovers a generic
+`dvd_mpegts_v1` provider and otherwise stays native. Core contains no MIM JSON,
+custom flags, executable lookup, or child-process code, and stock Core remains
+supported by the plugin's ordinary Fixed/MIM path.
+
+The repository syntax test and pinned Linux/Windows validation pass after this
+ownership clarification (`n9.0.1`, Linux PASS, Windows PASS). No MIM source or
+binary behavior changed.
+
 MIM 0.4.9 restores the stock SageTV metadata-parser contract with current
 FFmpeg. SageTV still sends its private `-dumpmetadata -v 2 -i FILE` command;
 MIM removes the unavailable switch, forces FFmpeg info output, and converts

@@ -18,6 +18,13 @@ existing compatible streams to MPEG-TS instead of passing copied H.264 to the
 incompatible DVD muxer. This changes only the temporary network transport; it
 does not rewrite the library file.
 
+For optional transformed DVD playback, the sibling SageTV FFmpeg plugin owns
+the Core extension provider and invokes MIM's existing `-sagetvdiscstream`
+mode only after `--mim-capabilities` reports `dvdStreamTransform: true`.
+SageTV Core knows only the generic `dvd_mpegts_v1` transport and has no
+MIM/FFmpeg process dependency. If this runtime or capability is absent, the
+updated Core safely retains native DVD playback.
+
 ```bash
 ./code/docker/run_unified_builder.sh all
 ```

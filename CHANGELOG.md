@@ -1,7 +1,11 @@
 # Changelog
 
-## Unreleased
+## 0.4.9 - 2026-09-20
 
+- Documented MIM as the runtime used by the optional SageTV FFmpeg plugin DVD
+  transform provider. MIM continues to own `-sagetvdiscstream` and the
+  `dvdStreamTransform` capability; SageTV Core no longer contains the custom
+  command, capability parser, executable resolver, or process manager.
 - Added MIM 0.4.9 compatibility for SageTV's historical `-dumpmetadata`
   contract on current FFmpeg. Metadata probes already replace the removed
   private switch and force info logging; they now also translate only modern
