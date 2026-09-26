@@ -13,6 +13,17 @@ The Linux/Windows toolchain Docker stages are owned by
 `opensagetv-vibe-build-env`; this repository has no standalone Docker image or
 container lifecycle.
 
+Windows capability discovery is now physically commissioned on the `.212`
+SageTV host. The former `_popen` probe was routed through `cmd.exe`, whose
+first-quoted-token parsing broke the FFmpeg path under `Program Files` and
+reported every backend unavailable. MIM now uses `CreateProcessW`, captures
+the child output directly, and runs bounded one-frame hardware preflights.
+The installed development wrapper selects Intel QSV; QSV and libx264 pass,
+while the legacy Quadro K1100M fails modern NVENC initialization at
+`cuMemAllocAsync` and is correctly rejected. The prior Windows wrapper remains
+recoverable beside the runtime as
+`ffmpeg_MIM.exe.before-win-probe-fix-20260926`.
+
 The optional DVD transform ownership is explicit. MIM continues to expose
 `dvdStreamTransform` through `--mim-capabilities` and implements
 `-sagetvdiscstream`; the sibling SageTV FFmpeg plugin is the only component

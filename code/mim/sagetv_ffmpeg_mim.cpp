@@ -205,6 +205,11 @@ static std::string shell_quote(const std::string& s) {
 #endif
 }
 
+#ifdef _WIN32
+static std::wstring widen(const std::string& s);
+static std::wstring quote_win(const std::wstring& s);
+#endif
+
 static std::string display_quote(const std::string& s) {
     if (s.find_first_of(" \t\"'") == std::string::npos) return s;
     std::string r="\""; for(char c:s){ if(c=='\"') r+="\\\""; else r+=c; } return r+="\"";
@@ -375,22 +380,79 @@ static bool likely_mpegts(const fs::path& p) {
     return e == ".ts" || e == ".mts" || e == ".m2ts" || e == ".m2t";
 }
 
-static std::pair<int,std::string> run_capture(const fs::path& exe, const std::vector<std::string>& args) {
+static std::pair<int,std::string> run_capture(const fs::path& exe,
+                                               const std::vector<std::string>& args,
+                                               long long timeout_ms=0) {
+#ifdef _WIN32
+    // _popen delegates through cmd.exe. Its special first-quoted-token rules
+    // misparse an executable under "Program Files", so every capability probe
+    // failed even though the same FFmpeg binary ran normally when launched
+    // directly. Capture through CreateProcessW instead; this also keeps shell
+    // metacharacters in paths and arguments from changing the command.
+    SECURITY_ATTRIBUTES sa{sizeof(sa),nullptr,TRUE};
+    HANDLE read_pipe=nullptr,write_pipe=nullptr;
+    if(!CreatePipe(&read_pipe,&write_pipe,&sa,0))
+        return {127,"CreatePipe failed error="+std::to_string(GetLastError())};
+    if(!SetHandleInformation(read_pipe,HANDLE_FLAG_INHERIT,0)) {
+        const DWORD error=GetLastError();
+        CloseHandle(read_pipe); CloseHandle(write_pipe);
+        return {127,"SetHandleInformation failed error="+std::to_string(error)};
+    }
+
+    std::wstring command=quote_win(exe.wstring());
+    for(const auto& arg:args) command+=L" "+quote_win(widen(arg));
+    std::vector<wchar_t> mutable_command(command.begin(),command.end());
+    mutable_command.push_back(L'\0');
+
+    STARTUPINFOW startup{};
+    startup.cb=sizeof(startup);
+    startup.dwFlags=STARTF_USESTDHANDLES;
+    startup.hStdInput=GetStdHandle(STD_INPUT_HANDLE);
+    startup.hStdOutput=write_pipe;
+    startup.hStdError=write_pipe;
+    PROCESS_INFORMATION process{};
+    const BOOL started=CreateProcessW(exe.wstring().c_str(),mutable_command.data(),
+        nullptr,nullptr,TRUE,CREATE_NO_WINDOW,nullptr,exe.parent_path().wstring().c_str(),
+        &startup,&process);
+    CloseHandle(write_pipe);
+    if(!started) {
+        const DWORD error=GetLastError();
+        CloseHandle(read_pipe);
+        return {127,"CreateProcessW failed error="+std::to_string(error)};
+    }
+
+    std::string output;
+    std::thread reader([&] {
+        char buffer[4096];
+        DWORD count=0;
+        while(ReadFile(read_pipe,buffer,(DWORD)sizeof(buffer),&count,nullptr) && count>0)
+            output.append(buffer,(size_t)count);
+        CloseHandle(read_pipe);
+    });
+    const DWORD wait_ms=timeout_ms>0
+        ? (DWORD)std::min<long long>(timeout_ms,(long long)MAXDWORD-1)
+        : INFINITE;
+    const DWORD wait_result=WaitForSingleObject(process.hProcess,wait_ms);
+    bool timed_out=wait_result==WAIT_TIMEOUT;
+    if(timed_out) {
+        TerminateProcess(process.hProcess,124);
+        WaitForSingleObject(process.hProcess,INFINITE);
+    }
+    reader.join();
+    DWORD exit_code=1;
+    if(!GetExitCodeProcess(process.hProcess,&exit_code)) exit_code=1;
+    CloseHandle(process.hThread);
+    CloseHandle(process.hProcess);
+    return {timed_out ? 124 : (int)exit_code,output};
+#else
     std::string cmd=shell_quote(exe.string()); for(auto& a:args) cmd += " " + shell_quote(a);
     cmd += " 2>&1";
-#ifdef _WIN32
-    FILE* fp=_popen(cmd.c_str(),"r");
-#else
     FILE* fp=popen(cmd.c_str(),"r");
-#endif
     if(!fp) return {-1,{}};
     std::string out; char b[4096]; while(fgets(b,sizeof(b),fp)) out += b;
-#ifdef _WIN32
-    int rc=_pclose(fp);
-#else
     int st=pclose(fp); int rc=WIFEXITED(st)?WEXITSTATUS(st):-1;
-#endif
     return {rc,out};
+#endif
 }
 
 static bool has_flag(const std::vector<std::string>& a, const std::string& opt) {
@@ -607,10 +669,52 @@ static bool hardware_encode_preflight(const Ini& ini, const fs::path& real,
                                       const std::string& backend,
                                       const std::string& encoder) {
 #ifdef _WIN32
-    // The Linux/Unraid release is the commissioned runtime target. Windows
-    // keeps capability-based selection until a bounded native process runner
-    // is added; do not invoke the unrelated Windows timeout.exe utility.
-    (void)ini; (void)real; (void)cache_dir; (void)log; (void)backend; (void)encoder;
+    if(!ini.get_bool("hardware","preflight_hardware_encode",true) || backend=="software")
+        return true;
+    std::error_code ec;
+    fs::create_directories(cache_dir,ec);
+    const auto cache_key=hex64(fnv1a64(real.string()+":"+file_stamp(real)+":"+
+                                           backend+":"+encoder));
+    const auto cache_file=cache_dir/("preflight-"+cache_key+".ok");
+    if(native_file_exists(cache_file)) {
+        log.log("hardware preflight cache HIT backend=",backend," encoder=",encoder);
+        return true;
+    }
+
+    const long long timeout_ms=std::max<long long>(1000,
+        ini.get_ll("hardware","preflight_timeout_ms",5000));
+    std::vector<std::string> args={"-hide_banner","-loglevel","error"};
+    if(backend=="d3d12va") {
+        args.insert(args.end(),{"-init_hw_device","d3d12va=hw","-filter_hw_device","hw"});
+    }
+    args.insert(args.end(),{"-f","lavfi","-i","color=black:size=64x64:rate=1",
+                            "-frames:v","1","-an"});
+    if(backend=="d3d12va")
+        args.insert(args.end(),{"-vf","format=nv12,hwupload"});
+    args.insert(args.end(),{"-c:v",encoder,"-f","null","-"});
+
+    auto [rc,output]=run_capture(real,args,timeout_ms);
+    if(rc!=0) {
+        if(output.size()>1000) output.resize(1000);
+        for(char& c:output) if(c=='\r' || c=='\n') c=' ';
+        log.log("WARNING hardware preflight failed backend=",backend,
+                " encoder=",encoder," rc=",rc," diagnostic=",output);
+        return false;
+    }
+    const auto temporary=cache_file.string()+".tmp."+
+        std::to_string((unsigned long long)GetCurrentProcessId());
+    {
+        std::ofstream saved(temporary,std::ios::trunc);
+        saved << "backend=" << backend << "\nencoder=" << encoder << "\n";
+    }
+    fs::rename(temporary,cache_file,ec);
+    if(ec) {
+        fs::remove(cache_file,ec);
+        ec.clear();
+        fs::rename(temporary,cache_file,ec);
+    }
+    if(ec) fs::remove(temporary,ec);
+    log.log("hardware preflight PASS backend=",backend," encoder=",encoder);
     return true;
 #else
     if(!ini.get_bool("hardware","preflight_hardware_encode",true) || backend=="software")
@@ -796,10 +900,8 @@ static void print_mim_capabilities(const fs::path& executable_dir, const Ini& in
         state.compiled=real_present && compiled(name);
         state.device=real_present && device_present(name);
         if(name=="software") state.preflight=state.compiled ? 1 : 0;
-#ifndef _WIN32
         else state.preflight=(state.compiled && state.device &&
             hardware_encode_preflight(ini,real,cache,log,name,state.encoder)) ? 1 : 0;
-#endif
         state.usable=state.compiled && state.device &&
             (name=="software" || state.preflight==1 || state.preflight==-1);
         if(platform.name=="windows-x64" && name=="vaapi") state.usable=false;

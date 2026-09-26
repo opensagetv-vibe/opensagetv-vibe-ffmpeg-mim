@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- Fixed Windows capability discovery when the plugin runtime is installed
+  under `Program Files`. MIM now launches FFmpeg directly with
+  `CreateProcessW` instead of passing the first quoted path through
+  `cmd.exe`, captures stdout/stderr through an inherited pipe, and enforces a
+  bounded native timeout for hardware encoder preflights.
+- Commissioned the fix on the Windows SageTV test server. Intel QSV and
+  software H.264 each passed a real one-frame encode; the legacy Quadro
+  K1100M NVENC path failed its real preflight because its driver lacks the
+  modern `cuMemAllocAsync` CUDA entry point. Capability output therefore
+  selects QSV and accurately marks NVENC, AMF, and D3D12VA unusable on that
+  host instead of treating every compiled encoder as working hardware.
+
 ## 0.4.9 - 2026-09-20
 
 - Documented MIM as the runtime used by the optional SageTV FFmpeg plugin DVD

@@ -13,6 +13,11 @@ recorded in `CHANGELOG.md` and `HANDOFF.md`.
 - [ ] Complete physical AMD VAAPI and NVIDIA NVENC tests. Intel VAAPI and
   deliberately failed-hardware software fallback pass; Intel QSV remains
   experimental after reproducible return-code-139 crashes.
+- [ ] Evaluate legacy Kepler NVENC compatibility using the Windows Quadro
+  K1100M test host. Prefer making unused modern CUDA entry points optional in
+  the dynamic loader; otherwise produce a separately identified legacy-NVENC
+  build against compatible NVIDIA codec/CUDA headers. Keep Intel QSV as the
+  commissioned backend until a real H.264 NVENC encode passes.
 - [ ] Repeat the complete final-runtime Android matrix on the exact release
   artifacts, including completed/growing media, four 2.1/5.1 changes, EOF, shutdown,
   teardown, captions, and no orphan jobs.
