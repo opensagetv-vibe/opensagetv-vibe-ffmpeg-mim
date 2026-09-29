@@ -9,6 +9,11 @@ Preserve FFmpeg pins, Linux/Windows outputs, LF settings, growing-file behavior,
 option ordering, rollback, and software fallback. Do not create standalone
 builder images or per-version/prompt/review documents.
 
+Release validation is impact-based: rerun only gates the release changes could
+affect. Do not repeat unrelated completed gates. Run the full gate suite only
+when the user explicitly requests it or a broad dependency/architecture change
+requires it, and document that reason and scope.
+
 
 ## Stock-server test-control policy
 
