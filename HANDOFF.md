@@ -1,17 +1,53 @@
 # Handoff
 
+## 0.4.10 release candidate (2026-09-29)
+
+The affected MIM behavior suite, static contracts, and full Linux/Windows
+runtime builds pass against FFmpeg n9.0.1. Deterministic SageTV runtime packages
+were produced with these SHA-256 values:
+
+- Linux amd64: `91d5f7593cd9ca44b09a1cf01b6803b7971fbe7db6b235acd7bebd2cddd076fd`
+- Windows x64: `d857b6379145859acec2b65a0f274ff66459beccaaad76448cfcffeaf5138e40`
+
+The paired FFmpeg Standard plugin 0.1.3 source, stock-JAR contracts, launchers,
+and deterministic packages also pass. Unrelated hardware/device matrices were
+not repeated under the impact-based release policy.
+
 ## Standard takeover
 
 Read `AGENTS.md`, `README.md`, `TASKS.md`, and `WORKFLOW.md`, then use the common
 root commands. Changed-files packages live in `artifacts/downloads`. Install
 means the non-Android MIM test suite and never enables MIM by default.
 
-Current state: MIM 0.4.9 and FFmpeg `n9.0.1` build successfully for Linux amd64
+Current state: MIM 0.4.10 and FFmpeg `n9.0.1` build successfully for Linux amd64
 and Windows amd64 in the single `opensagetv-vibe-dev` environment. Generated
 artifacts and checksums live under `output/<target>` and are not committed.
 The Linux/Windows toolchain Docker stages are owned by
 `opensagetv-vibe-build-env`; this repository has no standalone Docker image or
 container lifecycle.
+
+The current Direct-session build passes the deinterlace policy matrix. Linux
+`.232` uses full-GPU VAAPI decode and H.264 encode for Auto, On, and Off.
+Windows stock server `.185` uses full-GPU QSV decode and encode with Off;
+Auto/On accurately use the mixed fallback because Haswell QSV VPP rejects the
+interlaced surface contract. With Off, non-Pro Fire TV `.25` passed owned
+startup, hardware Android decode, FF/REW, pause/resume, event-225 CEA delivery,
+and clean teardown against both platforms. `.232` ended with zero caption and
+Direct sessions and no MIM/FFmpeg process. The rebuilt Linux and Windows
+wrapper hashes are respectively
+`79640cb17e6fd25a81920b73721cd417c8761ef50933a525a004c167481943ee`
+and `916540ab559d2277c2e6ac96998382704266ce7ff4e4e82556d65cc8d24e7d89`.
+
+The unreleased tree includes `--mim-hardware-test`, a bounded synthetic
+MPEG-2-to-H.264 diagnostic for the sibling Standard plugin. It reports decode,
+hardware filter, encode, complete hardware pipeline, software fallback, and a
+separately identified compatibility pipeline. On Windows test server `.212`
+with Intel HD 4600 driver `20.19.15.5126`, native QSV decode/filter/full
+pipeline fails with MFX session error `-9` while QSV encode passes. The tested
+D3D11VA decode, software scale, QSV encode compatibility pipeline passes.
+K1100M NVENC still fails because the legacy driver cannot expose
+`cuMemAllocAsync`. The command deletes its synthetic fixture and does not
+change `ffmpeg.real.ini`.
 
 Windows capability discovery is now physically commissioned on the `.212`
 SageTV host. The former `_popen` probe was routed through `cmd.exe`, whose

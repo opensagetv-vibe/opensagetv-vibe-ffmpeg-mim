@@ -42,7 +42,7 @@ static_assert(sizeof(void*) == 8, "SageTV FFmpeg MIM supports Windows x64 only."
 
 namespace fs = std::filesystem;
 
-static constexpr const char* MIM_VERSION = "0.4.9";
+static constexpr const char* MIM_VERSION = "0.4.10";
 
 static std::string trim(std::string s) {
     auto is_ws = [](unsigned char c){ return std::isspace(c) != 0; };
@@ -320,11 +320,97 @@ static bool is_encode_backend(const std::string& backend) {
         backend=="d3d12va" || backend=="software";
 }
 
+struct CaptionSideChannelSlot {
+    int port=0;
+    fs::path claim_path;
+    bool claimed() const { return port>0 && !claim_path.empty(); }
+};
+
+static bool safe_caption_token(const std::string& token) {
+    if(token.size()<24 || token.size()>128) return false;
+    return std::all_of(token.begin(),token.end(),[](unsigned char value){
+        return std::isalnum(value) || value=='-' || value=='_';
+    });
+}
+
+// The optional Standard plugin owns and binds a small loopback UDP listener
+// pool before advertising slots in the shared MIM status directory. Renaming
+// one available slot to a job-specific claim is atomic on both supported host
+// filesystems, so simultaneous transcoders cannot interleave their original
+// compressed-video streams. If the plugin is absent, disabled, old, or has no
+// free listener, no slot exists and the established SageTV command is left
+// unchanged.
+static CaptionSideChannelSlot claim_caption_side_channel(const Ini& ini,
+        const fs::path& status_dir, long long pid, Logger& log) {
+    CaptionSideChannelSlot result;
+    if(!ini.get_bool("caption_side_channel","enabled",true)) return result;
+    fs::path pool=trim(ini.get("caption_side_channel","pool_directory","caption-pool"));
+    if(pool.is_relative()) pool=status_dir/pool;
+    std::error_code ec;
+    if(!fs::is_directory(pool,ec)) return result;
+    std::vector<fs::path> candidates;
+    for(const auto& entry:fs::directory_iterator(pool,ec)) {
+        if(ec) break;
+        if(entry.is_regular_file()) candidates.push_back(entry.path());
+    }
+    std::sort(candidates.begin(),candidates.end());
+    for(const auto& available:candidates) {
+        const auto name=available.filename().string();
+        static const std::string prefix="available-";
+        static const std::string suffix=".slot";
+        if(name.rfind(prefix,0)!=0 || name.size()<=prefix.size()+suffix.size() ||
+                name.substr(name.size()-suffix.size())!=suffix) continue;
+        const auto body=name.substr(prefix.size(),name.size()-prefix.size()-suffix.size());
+        const auto dash=body.find('-');
+        if(dash==std::string::npos) continue;
+        const auto port_text=body.substr(0,dash);
+        const auto token=body.substr(dash+1);
+        const long long port_value=parse_ll(port_text,0);
+        if(port_value<1024 || port_value>65535 || !safe_caption_token(token)) continue;
+        const fs::path claimed=pool/("job-"+std::to_string(pid)+"-"+port_text+"-"+
+                                      token+suffix);
+        ec.clear();
+        fs::rename(available,claimed,ec);
+        if(ec) continue;
+        result.port=static_cast<int>(port_value);
+        result.claim_path=claimed;
+        log.log("caption-side-channel: claimed loopback port=",result.port,
+                " job=",pid);
+        return result;
+    }
+    return result;
+}
+
+static void release_caption_side_channel(const CaptionSideChannelSlot& slot, Logger& log) {
+    if(!slot.claimed()) return;
+    std::error_code ec;
+    fs::remove(slot.claim_path,ec);
+    if(ec) log.log("WARNING caption-side-channel claim cleanup failed port=",slot.port,
+                   " error=",ec.message());
+    else log.log("caption-side-channel: released loopback port=",slot.port);
+}
+
+static void append_caption_side_channel_output(std::vector<std::string>& args,
+        const Ini& ini, const CaptionSideChannelSlot& slot) {
+    if(!slot.claimed()) return;
+    const auto packet_size=std::max<long long>(188,std::min<long long>(65507,
+        ini.get_ll("caption_side_channel","udp_packet_size",1316)));
+    const auto buffer_size=std::max<long long>(65536,std::min<long long>(16777216,
+        ini.get_ll("caption_side_channel","udp_buffer_size",1048576)));
+    const auto destination="udp://127.0.0.1:"+std::to_string(slot.port)+
+        "?pkt_size="+std::to_string(packet_size)+"&buffer_size="+
+        std::to_string(buffer_size)+"&connect=0";
+    const std::vector<std::string> output={"-map","0:v:0?","-c:v","copy","-an",
+        "-sn","-dn","-f","mpegts",destination};
+    args.insert(args.end(),output.begin(),output.end());
+}
+
 static std::string mim_status_record(const std::string& platform_name, long long pid,
                                      const std::string& state, const std::string& backend,
                                      const std::string& encoder, bool hardware_decode,
                                      bool active_file, const std::optional<fs::path>& input,
                                      const std::string& output_format, long long started_ms,
+                                     std::optional<int> caption_port=std::nullopt,
                                      std::optional<int> exit_code=std::nullopt) {
     const bool hardware_encode=is_encode_backend(backend) && backend!="software";
     std::ostringstream out;
@@ -337,7 +423,9 @@ static std::string mim_status_record(const std::string& platform_name, long long
         << ",\"activeFile\":" << (active_file?"true":"false")
         << ",\"input\":\"" << json_escape(input?input->string():"")
         << "\",\"outputFormat\":\"" << json_escape(output_format)
-        << "\",\"startedEpochMs\":" << started_ms;
+        << "\",\"startedEpochMs\":" << started_ms
+        << ",\"captionSideChannel\":" << (caption_port?"true":"false");
+    if (caption_port) out << ",\"captionPort\":" << *caption_port;
     if (exit_code) out << ",\"exitCode\":" << *exit_code;
     out << '}';
     return out.str();
@@ -778,6 +866,70 @@ static bool hardware_encode_preflight(const Ini& ini, const fs::path& real,
 #endif
 }
 
+static fs::path runtime_quarantine_path(const fs::path& real,
+                                        const fs::path& cache_dir,
+                                        const std::string& backend,
+                                        const std::string& encoder) {
+    const auto key=hex64(fnv1a64(real.string()+":"+file_stamp(real)+":"+
+                                  backend+":"+encoder));
+    return cache_dir/("runtime-failure-"+key+".bad");
+}
+
+static bool runtime_backend_quarantined(const Ini& ini, const fs::path& real,
+                                        const fs::path& cache_dir, Logger& log,
+                                        const std::string& backend,
+                                        const std::string& encoder) {
+    if(backend=="software" || !ini.get_bool("hardware","runtime_failure_quarantine",true))
+        return false;
+    const auto marker=runtime_quarantine_path(real,cache_dir,backend,encoder);
+    std::ifstream in(marker);
+    long long failed_ms=0;
+    if(!(in>>failed_ms) || failed_ms<=0) return false;
+    const auto now_ms=std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    const auto ttl_ms=std::max<long long>(0,
+        ini.get_ll("hardware","runtime_failure_quarantine_seconds",3600))*1000;
+    if(ttl_ms>0 && now_ms-failed_ms<ttl_ms) {
+        log.log("hardware runtime quarantine HIT backend=",backend,
+                " encoder=",encoder," remaining_ms=",ttl_ms-(now_ms-failed_ms));
+        return true;
+    }
+    std::error_code ec;
+    fs::remove(marker,ec);
+    if(!ec) log.log("hardware runtime quarantine expired backend=",backend,
+                    " encoder=",encoder);
+    return false;
+}
+
+static void quarantine_runtime_backend(const Ini& ini, const fs::path& real,
+                                       const fs::path& cache_dir, Logger& log,
+                                       const std::string& backend,
+                                       const std::string& encoder,
+                                       int rc) {
+    if(backend=="software" || !is_encode_backend(backend) ||
+       !ini.get_bool("hardware","runtime_failure_quarantine",true)) return;
+    std::error_code ec;
+    fs::create_directories(cache_dir,ec);
+    const auto marker=runtime_quarantine_path(real,cache_dir,backend,encoder);
+    const auto now_ms=std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    const auto temporary=marker.string()+".tmp."+std::to_string(current_process_id());
+    {
+        std::ofstream out(temporary,std::ios::trunc);
+        out << now_ms << "\nbackend=" << backend << "\nencoder=" << encoder
+            << "\nrc=" << rc << "\n";
+    }
+    fs::rename(temporary,marker,ec);
+    if(ec) {
+        fs::remove(marker,ec);
+        ec.clear();
+        fs::rename(temporary,marker,ec);
+    }
+    if(ec) fs::remove(temporary,ec);
+    log.log("WARNING quarantined failed hardware backend=",backend,
+            " encoder=",encoder," rc=",rc);
+}
+
 static std::string choose_backend(const Ini& ini, const PlatformInfo& p, const fs::path& real,
                                   const fs::path& cache, Logger& log, const std::string& family,
                                   bool hardware_allowed=true) {
@@ -811,6 +963,7 @@ static std::string choose_backend(const Ini& ini, const PlatformInfo& p, const f
     auto backend_usable=[&](const std::string& b){
         if(!hardware_allowed && b!="software") return false;
         if(!has(enc(b))) return false;
+        if(runtime_backend_quarantined(ini,real,cache,log,b,enc(b))) return false;
 #ifndef _WIN32
         if(b=="qsv" && !linux_has_vendor("0x8086")) return false;
         if(b=="nvenc" && !(fs::exists("/dev/nvidiactl")||fs::exists("/dev/nvidia0"))) return false;
@@ -828,6 +981,7 @@ static std::string choose_backend(const Ini& ini, const PlatformInfo& p, const f
         // preflight itself is authoritative for container device visibility;
         // a simple host-path check is not used for explicit configurations.
         if((hardware_allowed || configured=="software") && has(enc(configured)) &&
+           !runtime_backend_quarantined(ini,real,cache,log,configured,enc(configured)) &&
            (configured=="software" || preflight(configured))) return configured;
         log.log("WARNING configured backend=",configured," does not expose ",enc(configured),"; falling back");
     }
@@ -937,6 +1091,349 @@ static void print_mim_capabilities(const fs::path& executable_dir, const Ini& in
     std::cout << "}}\n";
 }
 
+struct HardwareTestStage {
+    std::string state="unsupported";
+    std::string diagnostic;
+};
+
+struct HardwareTestBackend {
+    std::string name;
+    HardwareTestStage decode,filter,encode,pipeline,caption_side_channel,fallback_pipeline;
+};
+
+static std::string hardware_test_diagnostic(std::string output,
+        const fs::path& temporary_dir, const fs::path& executable_dir);
+static std::pair<int,std::string> run_hardware_test_command(const fs::path& real,
+        const std::vector<std::string>& ffmpeg_args, long long timeout_ms);
+
+static size_t count_binary_pattern(const fs::path& path,
+                                   const std::vector<unsigned char>& pattern) {
+    if(pattern.empty()) return 0;
+    std::ifstream input(path,std::ios::binary);
+    if(!input) return 0;
+    std::vector<unsigned char> data;
+    char byte=0;
+    while(input.get(byte)) data.push_back(static_cast<unsigned char>(byte));
+    size_t count=0;
+    for(size_t at=0;at+pattern.size()<=data.size();++at) {
+        if(std::equal(pattern.begin(),pattern.end(),data.begin()+at)) ++count;
+    }
+    return count;
+}
+
+// Build an actual MPEG-2 fixture carrying A/53 user data. This follows the
+// same MPEG-2 picture-user-data layout used by broadcast streams and avoids a
+// false-positive test that merely asks FFmpeg whether an encoder advertises
+// -a53cc. The original compressed video can consequently be stream-copied by
+// a second output while the first output uses a fully hardware-resident
+// decode/filter/encode pipeline.
+static HardwareTestStage create_captioned_hardware_fixture(const fs::path& real,
+        const fs::path& temporary_dir, const fs::path& executable_dir,
+        long long timeout_ms, fs::path& fixture) {
+    const fs::path elementary=temporary_dir/"mpeg2-source.m2v";
+    const fs::path captioned=temporary_dir/"mpeg2-captioned.m2v";
+    const auto source=run_hardware_test_command(real,
+        {"-hide_banner","-loglevel","error","-f","lavfi","-i",
+         "testsrc2=size=640x360:rate=25","-t","2","-an","-pix_fmt","yuv420p",
+         "-c:v","mpeg2video","-g","12","-bf","0","-f","mpeg2video","-y",
+         elementary.string()},timeout_ms);
+    if(source.first!=0 || !native_file_exists(elementary)) {
+        return {"fail","elementary fixture: exit="+std::to_string(source.first)+" "+
+            hardware_test_diagnostic(source.second,temporary_dir,executable_dir)};
+    }
+
+    std::ifstream input(elementary,std::ios::binary);
+    std::vector<unsigned char> bytes;
+    char byte=0;
+    while(input.get(byte)) bytes.push_back(static_cast<unsigned char>(byte));
+    static const std::vector<unsigned char> a53={
+        0x00,0x00,0x01,0xb2,0x47,0x41,0x39,0x34,0x03,0x44,0xff,0xfc,
+        0x94,0x2e,0xfc,0x94,0x20,0xfc,0x48,0x49,0xfc,0x94,0x2f,0xff};
+    std::ofstream output(captioned,std::ios::binary|std::ios::trunc);
+    bool picture=false;
+    size_t injected=0;
+    for(size_t at=0;at<bytes.size();++at) {
+        if(at+3<bytes.size() && bytes[at]==0 && bytes[at+1]==0 &&
+                bytes[at+2]==1) {
+            const unsigned int code=bytes[at+3];
+            if(code==0) picture=true;
+            else if(code>=1 && code<=0xaf && picture) {
+                output.write(reinterpret_cast<const char*>(a53.data()),
+                             static_cast<std::streamsize>(a53.size()));
+                picture=false;
+                ++injected;
+            }
+        }
+        output.put(static_cast<char>(bytes[at]));
+    }
+    output.close();
+    if(!output || injected<25) {
+        return {"fail","only "+std::to_string(injected)+" A/53 picture records were injected"};
+    }
+
+    fixture=temporary_dir/"mpeg2-captioned-source.ts";
+    const auto mux=run_hardware_test_command(real,
+        {"-hide_banner","-loglevel","error","-fflags","+genpts","-r","25",
+         "-i",captioned.string(),"-map","0:v:0","-c:v","copy","-an","-sn","-dn",
+         "-f","mpegts","-y",fixture.string()},timeout_ms);
+    if(mux.first!=0 || !native_file_exists(fixture)) {
+        return {"fail","caption fixture mux: exit="+std::to_string(mux.first)+" "+
+            hardware_test_diagnostic(mux.second,temporary_dir,executable_dir)};
+    }
+    const auto preserved=count_binary_pattern(fixture,{0x47,0x41,0x39,0x34});
+    if(preserved<25) return {"fail","caption fixture retained only "+
+        std::to_string(preserved)+" GA94 records"};
+    return {"pass",std::to_string(preserved)+" timed GA94 records"};
+}
+
+static std::string hardware_test_diagnostic(std::string output, const fs::path& temporary_dir,
+                                            const fs::path& executable_dir) {
+    const auto replace_all=[](std::string& value,const std::string& from,const std::string& to) {
+        if(from.empty()) return;
+        size_t at=0;
+        while((at=value.find(from,at))!=std::string::npos) {
+            value.replace(at,from.size(),to); at+=to.size();
+        }
+    };
+    replace_all(output,temporary_dir.string(),"<synthetic-test>");
+    replace_all(output,executable_dir.string(),"<runtime>");
+    for(char& c:output) if(c=='\r' || c=='\n' || c=='\t') c=' ';
+    while(output.find("  ")!=std::string::npos) replace_all(output,"  "," ");
+    output=trim(output);
+    if(output.size()>1200) output=output.substr(output.size()-1200);
+    return output;
+}
+
+static std::pair<int,std::string> run_hardware_test_command(const fs::path& real,
+        const std::vector<std::string>& ffmpeg_args, long long timeout_ms) {
+#ifdef _WIN32
+    return run_capture(real,ffmpeg_args,timeout_ms);
+#else
+    const fs::path timeout_exe="/usr/bin/timeout";
+    if(!native_file_exists(timeout_exe)) return {125,"/usr/bin/timeout is unavailable"};
+    std::vector<std::string> args={"--signal=KILL",
+        std::to_string(std::max<long long>(1,(timeout_ms+999)/1000))+"s",real.string()};
+    args.insert(args.end(),ffmpeg_args.begin(),ffmpeg_args.end());
+    return run_capture(timeout_exe,args);
+#endif
+}
+
+static HardwareTestStage run_hardware_test_stage(const fs::path& real,
+        const std::vector<std::string>& args, const fs::path& temporary_dir,
+        const fs::path& executable_dir, long long timeout_ms) {
+    const auto result=run_hardware_test_command(real,args,timeout_ms);
+    HardwareTestStage stage;
+    stage.state=result.first==0 ? "pass" : "fail";
+    stage.diagnostic=result.first==0 ? "" :
+        ("exit="+std::to_string(result.first)+" "+
+         hardware_test_diagnostic(result.second,temporary_dir,executable_dir));
+    return stage;
+}
+
+static std::vector<std::string> hardware_decode_prefix(const std::string& backend,
+        const Ini& ini, const PlatformInfo& platform) {
+    const auto device=trim(ini.get("hardware","linux_render_device","/dev/dri/renderD128"));
+    if(backend=="qsv") {
+        std::vector<std::string> result;
+        if(platform.name=="linux-x64") result={"-init_hw_device","qsv=hw,child_device="+device,"-filter_hw_device","hw"};
+        result.insert(result.end(),{"-hwaccel","qsv","-hwaccel_device","hw","-hwaccel_output_format","qsv"});
+        return result;
+    }
+    if(backend=="vaapi") return {"-vaapi_device",device,"-hwaccel","vaapi","-hwaccel_device",device,"-hwaccel_output_format","vaapi"};
+    if(backend=="nvenc") return {"-hwaccel","cuda","-hwaccel_output_format","cuda"};
+    if(backend=="amf") return {"-hwaccel","d3d11va","-hwaccel_output_format","d3d11"};
+    if(backend=="d3d12va") return {"-hwaccel","d3d12va","-hwaccel_output_format","d3d12"};
+    return {};
+}
+
+static void append_args(std::vector<std::string>& destination,
+                        std::initializer_list<std::string> values) {
+    destination.insert(destination.end(),values.begin(),values.end());
+}
+
+// Explicit, bounded synthetic test used by the Standard plugin. It never reads
+// user media, changes ffmpeg.real.ini, or changes backend selection. The MPEG-2
+// input and H.264 output mirror SageTV Fixed/DVD transcoding and deliberately
+// prove decode, filtering, encoding, and their combined path separately.
+static int print_mim_hardware_test(const fs::path& executable_dir, const Ini& ini,
+        const PlatformInfo& platform, const fs::path& real, Logger& log) {
+    if(!native_file_exists(real)) {
+        std::cout << "{\"schemaVersion\":1,\"state\":\"error\",\"summary\":\"FFmpeg runtime is missing\",\"backends\":{}}\n";
+        return 0;
+    }
+    const auto started=std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    const fs::path temp=executable_dir/"cache"/("hardware-test-"+
+        std::to_string(current_process_id())+"-"+std::to_string(started));
+    std::error_code ec;
+    fs::create_directories(temp,ec);
+    struct Cleanup { fs::path path; ~Cleanup(){ std::error_code ignored; fs::remove_all(path,ignored); } } cleanup{temp};
+    if(ec) {
+        std::cout << "{\"schemaVersion\":1,\"state\":\"error\",\"summary\":\"Unable to create synthetic-test directory\",\"backends\":{}}\n";
+        return 0;
+    }
+    const long long stage_timeout=std::max<long long>(3000,
+        ini.get_ll("hardware","diagnostic_timeout_ms",12000));
+    fs::path fixture;
+    const auto fixture_result=create_captioned_hardware_fixture(real,temp,executable_dir,
+                                                                 stage_timeout,fixture);
+    if(fixture_result.state!="pass") {
+        std::cout << "{\"schemaVersion\":1,\"state\":\"error\",\"summary\":\"Captioned synthetic MPEG-2 fixture failed\",\"diagnostic\":\""
+                  << json_escape(fixture_result.diagnostic) << "\",\"backends\":{}}\n";
+        return 0;
+    }
+
+    const auto encoders=load_capabilities(real,executable_dir/"cache"/"capabilities",log);
+    auto has_encoder=[&](const std::string& encoder){ return encoders.find(encoder)!=std::string::npos; };
+    std::vector<HardwareTestBackend> results;
+    for(const auto& backend: {std::string("vaapi"),std::string("qsv"),std::string("nvenc"),
+                              std::string("amf"),std::string("d3d12va"),std::string("software")}) {
+        HardwareTestBackend test; test.name=backend;
+        const bool platform_supported = backend=="software" ||
+            (platform.name=="windows-x64" ? backend!="vaapi" : (backend!="amf" && backend!="d3d12va"));
+        const std::string encoder=backend=="software" ? "libx264" :
+            (backend=="d3d12va" ? "h264_d3d12va" : "h264_"+backend);
+        if(!platform_supported) {
+            test.decode.diagnostic=test.filter.diagnostic=test.encode.diagnostic=test.pipeline.diagnostic=
+                test.caption_side_channel.diagnostic=test.fallback_pipeline.diagnostic=
+                "not available on "+platform.name;
+            results.push_back(test); continue;
+        }
+        if(!has_encoder(encoder)) {
+            test.decode.diagnostic=test.filter.diagnostic=test.encode.diagnostic=test.pipeline.diagnostic=
+                test.caption_side_channel.diagnostic=test.fallback_pipeline.diagnostic=
+                encoder+" is not compiled";
+            results.push_back(test); continue;
+        }
+
+        if(backend=="software") {
+            test.decode=run_hardware_test_stage(real,{"-hide_banner","-loglevel","error","-i",fixture.string(),"-frames:v","12","-an","-f","null","-"},temp,executable_dir,stage_timeout);
+            test.filter=run_hardware_test_stage(real,{"-hide_banner","-loglevel","error","-i",fixture.string(),"-frames:v","12","-an","-vf","scale=320:180,format=yuv420p","-f","null","-"},temp,executable_dir,stage_timeout);
+            test.encode=run_hardware_test_stage(real,{"-hide_banner","-loglevel","error","-f","lavfi","-i","color=black:size=320x180:rate=25","-frames:v","12","-an","-c:v",encoder,"-f","null","-"},temp,executable_dir,stage_timeout);
+            test.pipeline=run_hardware_test_stage(real,{"-hide_banner","-loglevel","error","-i",fixture.string(),"-frames:v","12","-an","-vf","scale=320:180,format=yuv420p","-c:v",encoder,"-f","null","-"},temp,executable_dir,stage_timeout);
+            const fs::path caption_copy=temp/(backend+"-caption-copy.ts");
+            const auto combined=run_hardware_test_stage(real,
+                {"-hide_banner","-loglevel","error","-i",fixture.string(),
+                 "-map","0:v:0","-frames:v","12","-an","-vf","scale=320:180,format=yuv420p",
+                 "-c:v",encoder,"-f","null","-",
+                 "-map","0:v:0","-frames:v","12","-an","-sn","-dn","-c:v","copy",
+                 "-f","mpegts","-y",caption_copy.string()},temp,executable_dir,stage_timeout);
+            const auto records=count_binary_pattern(caption_copy,{0x47,0x41,0x39,0x34});
+            test.caption_side_channel=combined;
+            if(combined.state=="pass" && records>=8)
+                test.caption_side_channel.diagnostic=std::to_string(records)+" original-video GA94 records";
+            else if(combined.state=="pass") {
+                test.caption_side_channel.state="fail";
+                test.caption_side_channel.diagnostic="original-video output retained only "+
+                    std::to_string(records)+" GA94 records";
+            }
+            test.fallback_pipeline.state="pass";
+            test.fallback_pipeline.diagnostic="same as the software pipeline";
+            results.push_back(test); continue;
+        }
+
+        auto prefix=hardware_decode_prefix(backend,ini,platform);
+        std::vector<std::string> base={"-hide_banner","-loglevel","error"};
+        base.insert(base.end(),prefix.begin(),prefix.end());
+        append_args(base,{"-i",fixture.string(),"-frames:v","12","-an"});
+        auto decode=base;
+        append_args(decode,{"-vf","hwdownload,format=nv12","-f","null","-"});
+        test.decode=run_hardware_test_stage(real,decode,temp,executable_dir,stage_timeout);
+
+        std::string hardware_filter;
+        if(backend=="qsv") hardware_filter="scale_qsv=w=320:h=180";
+        else if(backend=="vaapi") hardware_filter="scale_vaapi=w=320:h=180";
+        else if(backend=="nvenc") hardware_filter="scale_cuda=w=320:h=180";
+        else if(backend=="amf") hardware_filter="scale_d3d11=width=320:height=180";
+        if(hardware_filter.empty()) {
+            test.filter.diagnostic="no matching hardware scaler is available";
+            test.pipeline.diagnostic="full hardware path requires a matching hardware scaler";
+        } else {
+            auto filter=base;
+            append_args(filter,{"-vf",hardware_filter+",hwdownload,format=nv12","-f","null","-"});
+            test.filter=run_hardware_test_stage(real,filter,temp,executable_dir,stage_timeout);
+            auto pipeline=base;
+            append_args(pipeline,{"-vf",hardware_filter,"-c:v",encoder,"-f","null","-"});
+            test.pipeline=run_hardware_test_stage(real,pipeline,temp,executable_dir,stage_timeout);
+
+            // Prove a single FFmpeg job can keep the primary path fully on the
+            // selected GPU while independently copying the untouched source
+            // video for caption extraction. The secondary output never enters
+            // SageTV's stdout transport and therefore cannot add an unexpected
+            // video PID to old MiniClient sessions.
+            const fs::path caption_copy=temp/(backend+"-caption-copy.ts");
+            auto combined=base;
+            append_args(combined,{"-map","0:v:0","-vf",hardware_filter,"-c:v",encoder,
+                                  "-f","null","-",
+                                  "-map","0:v:0","-frames:v","12","-an","-sn","-dn",
+                                  "-c:v","copy","-f","mpegts","-y",caption_copy.string()});
+            test.caption_side_channel=run_hardware_test_stage(real,combined,temp,executable_dir,
+                                                               stage_timeout);
+            const auto records=count_binary_pattern(caption_copy,{0x47,0x41,0x39,0x34});
+            if(test.caption_side_channel.state=="pass" && records>=8)
+                test.caption_side_channel.diagnostic=std::to_string(records)+
+                    " original-video GA94 records";
+            else if(test.caption_side_channel.state=="pass") {
+                test.caption_side_channel.state="fail";
+                test.caption_side_channel.diagnostic="original-video output retained only "+
+                    std::to_string(records)+" GA94 records";
+            }
+        }
+
+        std::vector<std::string> encode={"-hide_banner","-loglevel","error"};
+        const auto render_device=trim(ini.get("hardware","linux_render_device","/dev/dri/renderD128"));
+        if(backend=="d3d12va") append_args(encode,{"-init_hw_device","d3d12va=hw","-filter_hw_device","hw"});
+        else if(backend=="vaapi") append_args(encode,{"-vaapi_device",render_device});
+        else if(backend=="qsv" && platform.name=="linux-x64")
+            append_args(encode,{"-init_hw_device","qsv=hw,child_device="+render_device,"-filter_hw_device","hw"});
+        append_args(encode,{"-f","lavfi","-i","color=black:size=320x180:rate=25","-frames:v","12","-an"});
+        if(backend=="vaapi" || backend=="d3d12va") append_args(encode,{"-vf","format=nv12,hwupload"});
+        append_args(encode,{"-c:v",encoder,"-f","null","-"});
+        test.encode=run_hardware_test_stage(real,encode,temp,executable_dir,stage_timeout);
+
+        if(backend=="qsv" && platform.name=="windows-x64") {
+            test.fallback_pipeline=run_hardware_test_stage(real,
+                {"-hide_banner","-loglevel","error","-hwaccel","d3d11va",
+                 "-hwaccel_output_format","d3d11","-i",fixture.string(),
+                 "-frames:v","12","-an","-vf","hwdownload,format=nv12,scale=320:180,format=nv12",
+                 "-c:v","h264_qsv","-f","null","-"},temp,executable_dir,stage_timeout);
+        } else {
+            test.fallback_pipeline.diagnostic="no separately validated compatibility pipeline for this backend";
+        }
+        results.push_back(test);
+    }
+
+    int hardware_pipeline_passes=0;
+    for(const auto& result:results) if(result.name!="software" && result.pipeline.state=="pass") ++hardware_pipeline_passes;
+    const auto selected=choose_backend(ini,platform,real,executable_dir/"cache"/"capabilities",log,"h264",true);
+    std::cout << "{\"schemaVersion\":1,\"state\":\"complete\",\"mimVersion\":\"" << json_escape(MIM_VERSION)
+              << "\",\"platform\":\"" << json_escape(platform.name)
+              << "\",\"fixture\":\"captioned synthetic MPEG-2 640x360p25 to H.264\",\"selectedBackend\":\""
+              << json_escape(selected) << "\",\"summary\":\"" << hardware_pipeline_passes
+              << " hardware pipeline(s) passed\",\"backends\":{";
+    for(size_t i=0;i<results.size();++i) {
+        if(i) std::cout << ',';
+        const auto& result=results[i];
+        std::cout << "\"" << result.name << "\":{";
+        const auto print_stage=[&](const char* name,const HardwareTestStage& stage,bool comma) {
+            if(comma) std::cout << ',';
+            std::cout << "\"" << name << "\":\"" << stage.state << "\"";
+        };
+        print_stage("decode",result.decode,false); print_stage("filter",result.filter,true);
+        print_stage("encode",result.encode,true); print_stage("pipeline",result.pipeline,true);
+        print_stage("captionSideChannel",result.caption_side_channel,true);
+        print_stage("fallbackPipeline",result.fallback_pipeline,true);
+        std::cout << ",\"diagnostics\":{\"decode\":\"" << json_escape(result.decode.diagnostic)
+                  << "\",\"filter\":\"" << json_escape(result.filter.diagnostic)
+                  << "\",\"encode\":\"" << json_escape(result.encode.diagnostic)
+                  << "\",\"pipeline\":\"" << json_escape(result.pipeline.diagnostic)
+                  << "\",\"captionSideChannel\":\"" << json_escape(result.caption_side_channel.diagnostic)
+                  << "\",\"fallbackPipeline\":\"" << json_escape(result.fallback_pipeline.diagnostic) << "\"}}";
+    }
+    std::cout << "}}\n";
+    return 0;
+}
+
 static std::string codec_for_backend(const Ini& ini, const std::string& b, const std::string& family) {
     const auto key="codec_"+family+"_"+b;
     if(family=="hevc") {
@@ -1016,7 +1513,8 @@ static std::optional<std::string> requested_transcode_family(const Ini& ini,
 
 static bool looks_like_sagetv_job(const std::vector<std::string>& original) {
     if(has_flag(original,"-stdinctrl") || has_flag(original,"-activefile") ||
-       has_flag(original,"-sagetvdiscstream")) return true;
+       has_flag(original,"-sagetvdiscstream") ||
+       has_flag(original,"-sagetvdirect")) return true;
     auto i=find_opt(original,{"-i"});
     if(i && *i+1<original.size() && lower(original[*i+1]).rfind("stv://",0)==0) return true;
     return false;
@@ -1066,6 +1564,17 @@ static std::vector<std::string> rewrite_args(const Ini& ini, const PlatformInfo&
                                               bool& stdinctrl, bool& active, std::optional<fs::path>& input,
                                               std::string& backend) {
     std::vector<std::string> a=original;
+
+    // SageTV's bundled FFmpeg accepted a private `-priority <class>` option.
+    // Upstream FFmpeg does not, and rejects every affected metadata,
+    // thumbnail, and Fixed-transcode command before it opens the input. Keep
+    // the requested class in `original` so the Windows launcher can apply it
+    // through CreateProcessW, but never forward the private option to FFmpeg.
+    // On POSIX the child already inherits SageTV/MIM scheduling priority.
+    if (find_opt(a,{"-priority"})) {
+        remove_opt_value(a,{"-priority"});
+        log.log("compat: translated legacy SageTV -priority to child process scheduling");
+    }
 
     // SageTV's thumbnail generator used private options from its historical
     // FFmpeg fork. Current FFmpeg has no equivalents and aborts before reading
@@ -1151,8 +1660,36 @@ static std::vector<std::string> rewrite_args(const Ini& ini, const PlatformInfo&
     }
     const bool sagetv_job=looks_like_sagetv_job(original);
     const bool disc_stream=has_flag(a,"-sagetvdiscstream");
+    const bool direct_stream=has_flag(a,"-sagetvdirect");
+    // Consume this private Direct-session option in the same pass that reads
+    // it. Keeping the read and erase atomic avoids ever forwarding a plugin
+    // control option to upstream FFmpeg, including on the Windows CRT argv
+    // path. A missing value is treated as Auto and the dangling flag is still
+    // removed so playback fails safe instead of reaching FFmpeg with an
+    // unknown option.
+    std::string direct_deinterlace="auto";
+    for(size_t i=0;i<a.size();) {
+        if(lower(a[i])=="-sagetvdeinterlace") {
+            if(i+1<a.size()) {
+                direct_deinterlace=lower(trim(a[i+1]));
+                a.erase(a.begin()+i,a.begin()+i+2);
+            } else {
+                a.erase(a.begin()+i);
+            }
+            continue;
+        }
+        ++i;
+    }
+    if(direct_deinterlace!="auto" && direct_deinterlace!="on" &&
+       direct_deinterlace!="off") {
+        log.log("WARNING invalid Direct deinterlace policy '",direct_deinterlace,
+                "'; using auto");
+        direct_deinterlace="auto";
+    }
     remove_flag(a,"-sagetvdiscstream");
+    remove_flag(a,"-sagetvdirect");
     if(disc_stream) log.log("compat: SageTV DVD VM stream transform enabled");
+    if(direct_stream) log.log("compat: SageTV plugin-owned direct media session enabled");
     stdinctrl=has_flag(a,"-stdinctrl"); active=has_flag(a,"-activefile");
     remove_flag(a,"-stdinctrl"); remove_flag(a,"-activefile");
     translate_local_stv(a,log);
@@ -1319,9 +1856,38 @@ static std::vector<std::string> rewrite_args(const Ini& ini, const PlatformInfo&
     const bool caption_decode_policy=ini.has("closed_captions","caption_software_decode")
         ? ini.get_bool("closed_captions","caption_software_decode",true)
         : (backend=="qsv" && ini.get_bool("closed_captions","qsv_software_decode",true));
+    // Negotiated plugin-owned Direct Transcode has a second, stream-copy output
+    // of the original compressed video feeding the Standard plugin's bounded
+    // caption parser. An owned DVD transform likewise carries authored
+    // subpictures through an explicitly mapped subtitle output instead of
+    // relying on MPEG-2 A/53 frame side data. Neither path therefore needs the
+    // legacy Fixed caption-safe software decoder. Keep that established policy
+    // for ordinary Fixed, but give both owned transports the separately gated
+    // full-GPU decode/filter/encode policy.
+    // Windows QSV drivers can pass the small encoder preflight yet reject the
+    // D3D surface pool required by hardware MPEG-2 decode + deinterlace at the
+    // first real 1080i frame (notably Haswell reports texture error 80070057).
+    // Keep the generally validated full-GPU owned path on Linux.  On Windows,
+    // default to software decode/deinterlace feeding the selected hardware
+    // encoder; an operator may explicitly enable the full-GPU path after the
+    // Hardware Test and representative interlaced media both pass.
+    const bool windows_owned_hardware_decode=
+        ini.get_bool("hardware","windows_direct_hardware_decode",false);
+    // An explicit Direct `off` request removes the failing Windows VPP stage.
+    // The validated Haswell path can then keep QSV decode and encode active.
+    // Auto/On retain the conservative Windows software-decode/deinterlace
+    // fallback unless the operator has enabled the broader INI override.
+    const bool direct_deinterlace_off=direct_stream && direct_deinterlace=="off";
+    const bool owned_hardware_decode=(direct_stream || disc_stream) &&
+        ini.get_bool("hardware","direct_hardware_decode",true) &&
+        (p.name!="windows-x64" || windows_owned_hardware_decode ||
+         direct_deinterlace_off);
     const bool force_caption_software_decode=preserve_a53cc && caption_decode_policy &&
+        !owned_hardware_decode &&
         (backend=="qsv" || backend=="nvenc" || backend=="vaapi");
-    const bool configured_hardware_decode=ini.get_bool("hardware","hardware_decode",false);
+    const bool configured_hardware_decode=(direct_stream || disc_stream)
+        ? owned_hardware_decode
+        : ini.get_bool("hardware","hardware_decode",false);
     const bool hardware_decode=configured_hardware_decode && !force_caption_software_decode &&
         (!active || ini.get_bool("hardware","active_file_hardware_decode",false));
     if(force_caption_software_decode && configured_hardware_decode)
@@ -1389,12 +1955,24 @@ static std::vector<std::string> rewrite_args(const Ini& ini, const PlatformInfo&
             requested_height=requested_size->substr(x+1);
         }
     }
+    const auto effective_deinterlace=direct_stream
+        ? direct_deinterlace : lower(ini.get("filters","deinterlace","auto"));
     auto apply_hardware_filter=[&](const std::string& prefix,
                                    const std::string& default_no_scale,
                                    const std::string& default_scale){
-        auto filter_mode=lower(ini.get("filters","deinterlace","auto"));
-        if(filter_mode!="on" && filter_mode!="auto") return;
         std::string vf;
+        if(effective_deinterlace=="off") {
+            if(!requested_width.empty() && !requested_height.empty()) {
+                if(prefix=="qsv") vf="scale_qsv=w=%w%:h=%h%";
+                else if(prefix=="nvenc") vf="scale_cuda=w=%w%:h=%h%";
+                else if(prefix=="vaapi") vf="scale_vaapi=w=%w%:h=%h%";
+                vf=expand_filter_size(vf,requested_width,requested_height);
+                remove_opt_value(a,{"-s"});
+            }
+            remove_opt_value(a,{"-vf","-filter:v"});
+            if(!trim(vf).empty()) set_output_opt(a,{"-vf","-filter:v"},"-vf",vf);
+            return;
+        }
         if(!requested_width.empty() && !requested_height.empty()) {
             vf=expand_filter_size(ini.get("filters",prefix+"_scale",default_scale),
                                   requested_width,requested_height);
@@ -1420,13 +1998,17 @@ static std::vector<std::string> rewrite_args(const Ini& ini, const PlatformInfo&
         // preserves A/53 side data and leaves substantially more live headroom.
         std::string vf;
         if(!requested_width.empty() && !requested_height.empty()) {
-            vf=expand_filter_size(ini.get("filters","qsv_software_scale",
+            vf=effective_deinterlace=="off"
+                ? expand_filter_size("scale=w=%w%:h=%h%,format=nv12",
+                                     requested_width,requested_height)
+                : expand_filter_size(ini.get("filters","qsv_software_scale",
                     "yadif=deint=interlaced,scale=w=%w%:h=%h%,format=nv12"),
                     requested_width,requested_height);
             remove_opt_value(a,{"-s"});
         } else {
-            vf=ini.get("filters","qsv_software_no_scale",
-                       "yadif=deint=interlaced,format=nv12");
+            vf=effective_deinterlace=="off" ? "format=nv12" :
+                ini.get("filters","qsv_software_no_scale",
+                        "yadif=deint=interlaced,format=nv12");
         }
         if(!trim(vf).empty()) set_output_opt(a,{"-vf","-filter:v"},"-vf",vf);
     } else if(backend=="nvenc" && hardware_decode) {
@@ -1441,19 +2023,36 @@ static std::vector<std::string> rewrite_args(const Ini& ini, const PlatformInfo&
         // h264_vaapi/hevc_vaapi fails before emitting a video packet.
         std::string vf;
         if(!requested_width.empty() && !requested_height.empty()) {
-            vf=expand_filter_size(ini.get("filters","vaapi_software_scale",
+            vf=effective_deinterlace=="off"
+                ? expand_filter_size("format=nv12,hwupload,scale_vaapi=w=%w%:h=%h%",
+                                     requested_width,requested_height)
+                : expand_filter_size(ini.get("filters","vaapi_software_scale",
                     "yadif=deint=interlaced,format=nv12,hwupload,scale_vaapi=w=%w%:h=%h%"),
                     requested_width,requested_height);
             remove_opt_value(a,{"-s"});
         } else {
-            vf=ini.get("filters","vaapi_software_no_scale",
-                       "yadif=deint=interlaced,format=nv12,hwupload");
+            vf=effective_deinterlace=="off" ? "format=nv12,hwupload" :
+                ini.get("filters","vaapi_software_no_scale",
+                        "yadif=deint=interlaced,format=nv12,hwupload");
         }
         if(!trim(vf).empty()) set_output_opt(a,{"-vf","-filter:v"},"-vf",vf);
     }
 
     auto codec=codec_for_backend(ini,backend,family);
     set_output_opt(a,{"-vcodec","-c:v","-codec:v"},"-c:v",codec);
+
+#ifdef _WIN32
+    // Intel's legacy Haswell Media SDK driver can accept the QSV preflight but
+    // fail a sustained 1080i encode with MFX_ERR_DEVICE_FAILED when FFmpeg's
+    // default asynchronous surface queue fills. A depth of one completed the
+    // same three-minute MPEG-2/AC-3 workload that otherwise failed within
+    // seconds. Keep this Windows-only and configurable so newer adapters can
+    // opt back into a deeper queue after physical validation.
+    if(backend=="qsv") {
+        const auto depth=ini.get_ll("hardware","windows_qsv_async_depth",1);
+        if(depth>0) set_output_opt(a,{"-async_depth"},"-async_depth",std::to_string(depth));
+    }
+#endif
 
     if(lower(ini.get("video","gop_mode","clamp"))=="clamp") {
         auto g=get_opt_value(a,{"-g"}); long long maxg=ini.get_ll("video","gop_max",60);
@@ -1521,6 +2120,23 @@ static std::vector<std::string> rewrite_args(const Ini& ini, const PlatformInfo&
     auto effective_format=get_output_opt_value(a,{"-f"});
     const bool output_is_mpegts=effective_format && ieq(*effective_format,"mpegts");
     if(output_is_mpegts) {
+        // Stock SageTV's Fixed MiniPlayer command always supplies -sn and maps
+        // only its chosen video/audio streams. That is correct for the old
+        // transcoder, but it silently removes DVB bitmap and DVB Teletext
+        // subtitle PIDs before a modern Android client can discover or decode
+        // them. Preserve every recognized subtitle stream only for a mapped
+        // MPEG-TS-to-MPEG-TS SageTV transcode. Optional mapping keeps ordinary
+        // ATSC recordings (which have no subtitle stream) valid, while stream
+        // copy retains the original DVB codec and language descriptors.
+        const bool preserve_broadcast_subtitles=
+            ini.get_bool("closed_captions","preserve_mpegts_subtitles",true);
+        if(preserve_broadcast_subtitles && sagetv_job && input &&
+           likely_mpegts(*input)) {
+            remove_flag(a,"-sn");
+            add_output_tokens(a,{"-map","0:s?"});
+            set_output_opt(a,{"-scodec","-c:s","-codec:s"},"-c:s","copy");
+            log.log("compat: preserved MPEG-TS DVB/Teletext subtitle streams");
+        }
         if(lower(ini.get("output","muxpreload_mode","override"))=="override") set_output_opt(a,{"-muxpreload"},"-muxpreload",ini.get("output","muxpreload","0"));
         if(lower(ini.get("output","muxdelay_mode","override"))=="override") set_output_opt(a,{"-muxdelay"},"-muxdelay",ini.get("output","muxdelay","0"));
         if(ini.get_bool("output","mpegts_initial_discontinuity",true)) {
@@ -1570,13 +2186,22 @@ static bool is_stop_cmd(const ControlConfig& c, std::string line) {
 }
 static bool starts_ci(const std::string& s, const std::string& p) { return lower(trim(s)).rfind(lower(p),0)==0; }
 
+static bool contains_hardware_runtime_failure(const std::string& text) {
+    const auto diagnostic=lower(text);
+    return diagnostic.find("device failed")!=std::string::npos ||
+           diagnostic.find("mfx_err_device_failed")!=std::string::npos ||
+           diagnostic.find("device lost")!=std::string::npos ||
+           diagnostic.find("gpu hang")!=std::string::npos;
+}
+
 #ifndef _WIN32
 static volatile sig_atomic_t g_mim_parent_signal = 0;
 static void mim_parent_signal_handler(int sig) { g_mim_parent_signal = sig; }
 
 static int run_child_posix(const fs::path& exe, const std::vector<std::string>& args,
                            const ControlConfig& cc, Logger& log, bool log_stderr,
-                           bool legacy_metadata_output) {
+                           bool legacy_metadata_output,
+                           bool& hardware_runtime_failure) {
     // The MIM must survive a child closing its stdin or SageTV closing an
     // inherited pipe.  Restore normal SIGPIPE semantics in ffmpeg.real after
     // fork so a broken MiniPlayer output pipe terminates FFmpeg, not the MIM.
@@ -1751,6 +2376,8 @@ static int run_child_posix(const fs::path& exe, const std::vector<std::string>& 
         for(;;) {
             ssize_t n=read(perr[0],tmp,sizeof(tmp));
             if(n>0) {
+                if(contains_hardware_runtime_failure(std::string(tmp,(size_t)n)))
+                    hardware_runtime_failure=true;
                 // Preserve normal child stderr exactly. Metadata probes alone
                 // receive the legacy stream-index delimiter SageTV parses.
                 std::string forwarded=legacy_metadata_output
@@ -1893,9 +2520,25 @@ static std::wstring widen(const std::string& s){
     return w;
 }
 static std::wstring quote_win(const std::wstring& s){ if(s.find_first_of(L" \t\"")==std::wstring::npos)return s; std::wstring r=L"\""; unsigned bs=0; for(wchar_t c:s){ if(c==L'\\'){bs++;continue;} if(c==L'\"'){r.append(bs*2+1,L'\\');r+=L'\"';bs=0;continue;} r.append(bs,L'\\');bs=0;r+=c;} r.append(bs*2,L'\\');r+=L'\"'; return r; }
+static DWORD windows_priority_class(const std::vector<std::string>& original){
+    auto value=get_opt_value(original,{"-priority"});
+    if(!value) return 0;
+    const auto requested=lower(trim(*value));
+    if(requested=="idle") return IDLE_PRIORITY_CLASS;
+    if(requested=="belownormal" || requested=="below_normal") return BELOW_NORMAL_PRIORITY_CLASS;
+    if(requested=="normal") return NORMAL_PRIORITY_CLASS;
+    if(requested=="abovenormal" || requested=="above_normal") return ABOVE_NORMAL_PRIORITY_CLASS;
+    if(requested=="high") return HIGH_PRIORITY_CLASS;
+    // Never grant REALTIME_PRIORITY_CLASS from a media command. An unknown or
+    // unsafe value safely falls back to the inherited process priority.
+    return 0;
+}
 static int run_child_windows(const fs::path& exe,const std::vector<std::string>& args,
                              const ControlConfig& cc,Logger& log,
-                             bool legacy_metadata_output){
+                             bool legacy_metadata_output,
+                             bool log_stderr,
+                             DWORD priority_class,
+                             bool& hardware_runtime_failure){
     SECURITY_ATTRIBUTES sa{sizeof(sa),nullptr,TRUE};
     HANDLE rd=nullptr,wr=nullptr;
     if(!CreatePipe(&rd,&wr,&sa,0))return 127;
@@ -1905,7 +2548,8 @@ static int run_child_windows(const fs::path& exe,const std::vector<std::string>&
     for(auto&a:args)cmd+=L" "+quote_win(widen(a));
     std::vector<wchar_t> mutable_cmd(cmd.begin(),cmd.end()); mutable_cmd.push_back(0);
     HANDLE err_rd=nullptr,err_wr=nullptr;
-    if(legacy_metadata_output) {
+    const bool capture_stderr=legacy_metadata_output || log_stderr;
+    if(capture_stderr) {
         if(!CreatePipe(&err_rd,&err_wr,&sa,0)) {
             CloseHandle(rd); CloseHandle(wr); return 127;
         }
@@ -1913,36 +2557,93 @@ static int run_child_windows(const fs::path& exe,const std::vector<std::string>&
     }
     STARTUPINFOW si{}; si.cb=sizeof(si); si.dwFlags=STARTF_USESTDHANDLES;
     si.hStdInput=rd; si.hStdOutput=GetStdHandle(STD_OUTPUT_HANDLE);
-    si.hStdError=legacy_metadata_output?err_wr:GetStdHandle(STD_ERROR_HANDLE);
+    si.hStdError=capture_stderr?err_wr:GetStdHandle(STD_ERROR_HANDLE);
+
+    // SageTV implements a Fixed-mode seek by destroying the current transcoder
+    // process and immediately launching a replacement with a new -ss value.
+    // On Windows, terminating this MIM wrapper does not normally terminate the
+    // independently-created ffmpeg.real child. The orphan can keep SageTV's old
+    // stdout pipe and the QSV/NVENC session alive long enough for the replacement
+    // encoder to fail, producing a Broken-pipe/Invalid-argument restart loop.
+    //
+    // Put the child in a private kill-on-close Job Object before it can execute.
+    // If SageTV destroys the wrapper, Windows closes the wrapper's job handle and
+    // atomically terminates the complete child process tree. A platform/policy
+    // that refuses Job assignment falls back to the historical launch behavior
+    // and is logged; playback must never fail merely because containment was
+    // unavailable.
+    HANDLE child_job=CreateJobObjectW(nullptr,nullptr);
+    bool kill_on_close=false;
+    if(child_job) {
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION job_info{};
+        job_info.BasicLimitInformation.LimitFlags=JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        if(SetInformationJobObject(child_job,JobObjectExtendedLimitInformation,
+                                   &job_info,sizeof(job_info))) {
+            kill_on_close=true;
+        } else {
+            log.log("WARNING SetInformationJobObject(KILL_ON_JOB_CLOSE) failed code=",GetLastError());
+            CloseHandle(child_job); child_job=nullptr;
+        }
+    } else {
+        log.log("WARNING CreateJobObject failed code=",GetLastError());
+    }
+
     PROCESS_INFORMATION pi{};
-    BOOL ok=CreateProcessW(exe.wstring().c_str(),mutable_cmd.data(),nullptr,nullptr,TRUE,0,nullptr,exe.parent_path().wstring().c_str(),&si,&pi);
+    const DWORD creation_flags=priority_class | (kill_on_close?CREATE_SUSPENDED:0);
+    BOOL ok=CreateProcessW(exe.wstring().c_str(),mutable_cmd.data(),nullptr,nullptr,TRUE,
+                           creation_flags,nullptr,exe.parent_path().wstring().c_str(),&si,&pi);
     CloseHandle(rd);
     if(err_wr) CloseHandle(err_wr);
-    if(!ok){CloseHandle(wr);if(err_rd)CloseHandle(err_rd);log.log("ERROR CreateProcess failed code=",GetLastError());return 127;}
+    if(!ok){
+        const DWORD error=GetLastError();
+        if(child_job) CloseHandle(child_job);
+        CloseHandle(wr);if(err_rd)CloseHandle(err_rd);
+        log.log("ERROR CreateProcess failed code=",error);return 127;
+    }
+    if(kill_on_close) {
+        if(AssignProcessToJobObject(child_job,pi.hProcess)) {
+            log.log("lifecycle: child assigned to Windows kill-on-close job pid=",pi.dwProcessId);
+        } else {
+            const DWORD error=GetLastError();
+            log.log("WARNING AssignProcessToJobObject failed code=",error,
+                    "; continuing without child containment");
+            CloseHandle(child_job); child_job=nullptr; kill_on_close=false;
+        }
+        ResumeThread(pi.hThread);
+    }
 
     std::thread metadata_thread;
-    if(legacy_metadata_output) {
-        metadata_thread=std::thread([err_rd,&log](){
+    if(capture_stderr) {
+        metadata_thread=std::thread([err_rd,&log,legacy_metadata_output,log_stderr,
+                                     &hardware_runtime_failure](){
             std::string pending;
             char tmp[4096]; DWORD n=0;
             HANDLE parent_stderr=GetStdHandle(STD_ERROR_HANDLE);
             while(ReadFile(err_rd,tmp,(DWORD)sizeof(tmp),&n,nullptr) && n>0) {
-                auto forwarded=adapt_sagetv_metadata_chunk(pending,tmp,(size_t)n);
+                if(contains_hardware_runtime_failure(std::string(tmp,(size_t)n)))
+                    hardware_runtime_failure=true;
+                auto forwarded=legacy_metadata_output
+                    ? adapt_sagetv_metadata_chunk(pending,tmp,(size_t)n)
+                    : std::string(tmp,(size_t)n);
                 if(!forwarded.empty()) {
                     DWORD off=0;
-                    while(off<forwarded.size()) {
+                    while(parent_stderr!=INVALID_HANDLE_VALUE && parent_stderr!=nullptr
+                            && off<forwarded.size()) {
                         DWORD written=0;
                         if(!WriteFile(parent_stderr,forwarded.data()+off,
                                       (DWORD)(forwarded.size()-off),&written,nullptr) || written==0) break;
                         off+=written;
                     }
-                    log.log("ffmpeg-metadata: ",trim(forwarded));
+                    if(legacy_metadata_output) log.log("ffmpeg-metadata: ",trim(forwarded));
+                    else if(log_stderr) log.log("ffmpeg-stderr: ",trim(forwarded));
                 }
             }
-            auto tail=adapt_sagetv_metadata_chunk(pending,nullptr,0,true);
+            auto tail=legacy_metadata_output
+                ? adapt_sagetv_metadata_chunk(pending,nullptr,0,true) : std::string();
             if(!tail.empty()) {
                 DWORD written=0;
-                WriteFile(parent_stderr,tail.data(),(DWORD)tail.size(),&written,nullptr);
+                if(parent_stderr!=INVALID_HANDLE_VALUE && parent_stderr!=nullptr)
+                    WriteFile(parent_stderr,tail.data(),(DWORD)tail.size(),&written,nullptr);
                 log.log("ffmpeg-metadata: ",trim(tail));
             }
             CloseHandle(err_rd);
@@ -2006,6 +2707,7 @@ static int run_child_windows(const fs::path& exe,const std::vector<std::string>&
     if(metadata_thread.joinable()) metadata_thread.join();
     if(wr!=nullptr) CloseHandle(wr);
     CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
+    if(child_job) CloseHandle(child_job);
     return (int)rc;
 }
 #endif
@@ -2067,6 +2769,7 @@ int main(int argc,char** argv){
     bool dry_run = argc>=2 && std::string(argv[1])=="--mim-dry-run";
     bool status_query = argc>=2 && std::string(argv[1])=="--mim-status";
     bool capabilities_query = argc>=2 && std::string(argv[1])=="--mim-capabilities";
+    bool hardware_test_query = argc>=2 && std::string(argv[1])=="--mim-hardware-test";
     fs::path ini_path=dir/"ffmpeg.real.ini";
     if(const char* e=std::getenv("SAGETV_FFMPEG_MIM_INI")) ini_path=e;
     Ini ini; if(!ini.load(ini_path)){ std::cerr<<"SageTV FFmpeg MIM: cannot load "<<ini_path<<"\n"; return 78; }
@@ -2091,6 +2794,7 @@ int main(int argc,char** argv){
         print_mim_capabilities(dir,ini,platform,real,log);
         return 0;
     }
+    if(hardware_test_query) return print_mim_hardware_test(dir,ini,platform,real,log);
     if(!ini.get_bool("general","enabled",true)){ std::cerr<<"SageTV FFmpeg MIM is disabled in INI\n"; return 78; }
     if(!native_file_exists(real)){ std::cerr<<"SageTV FFmpeg MIM: real FFmpeg not found: "<<real<<"\n"; log.log("ERROR real FFmpeg missing ",real.string()); return 127; }
     std::vector<std::string> orig; for(int i=dry_run?2:1;i<argc;++i)orig.emplace_back(argv[i]);
@@ -2104,8 +2808,9 @@ int main(int argc,char** argv){
     if(ini.get_bool("logging","log_original_command",true))log.log("original: ",join_display(self,orig));
     bool stdinctrl=false,active=false; std::optional<fs::path> input; std::string backend;
     auto final_args=rewrite_args(ini,platform,dir,real,ffprobe,orig,log,stdinctrl,active,input,backend);
-    if(ini.get_bool("logging","log_final_command",true))log.log("final backend=",backend," cmd=",join_display(real,final_args));
     if(dry_run) {
+        if(ini.get_bool("logging","log_final_command",true))
+            log.log("final backend=",backend," cmd=",join_display(real,final_args));
         std::cout << "backend=" << backend << "\n" << join_display(real,final_args) << "\n";
         return 0;
     }
@@ -2118,8 +2823,17 @@ int main(int argc,char** argv){
     const bool status_hardware_decode=has_flag(final_args,"-hwaccel");
     const fs::path status_dir=mim_status_directory(dir,ini);
     const fs::path active_status=status_dir/("job-"+std::to_string(mim_pid)+".json");
+    CaptionSideChannelSlot caption_slot;
+    if(stdinctrl && is_encode_backend(backend)) {
+        caption_slot=claim_caption_side_channel(ini,status_dir,mim_pid,log);
+        append_caption_side_channel_output(final_args,ini,caption_slot);
+    }
+    if(ini.get_bool("logging","log_final_command",true))
+        log.log("final backend=",backend," cmd=",join_display(real,final_args));
+    const auto caption_port=caption_slot.claimed()
+        ? std::optional<int>(caption_slot.port) : std::nullopt;
     const auto running_status=mim_status_record(platform.name,mim_pid,"running",backend,encoder,
-        status_hardware_decode,active,input,output_format,started_ms);
+        status_hardware_decode,active,input,output_format,started_ms,caption_port);
     atomic_write_text(active_status,running_status);
     atomic_write_text(status_dir/"last.json",running_status);
     if(is_encode_backend(backend)) atomic_write_text(status_dir/"last-transcode.json",running_status);
@@ -2129,18 +2843,30 @@ int main(int argc,char** argv){
     ControlConfig cc; cc.enabled=stdinctrl&&ini.get_bool("stdinctrl","enabled",true); cc.case_insensitive=ini.get_bool("stdinctrl","case_insensitive",true); cc.rate_enabled=has_flag(final_args,"-sagetvratectrl"); cc.rate_mode=lower(ini.get("stdinctrl","videorateadapt_mode","forward")); cc.inactive_action=lower(ini.get("active_file","inactivefile_action","terminate_child")); cc.active=active; cc.isolate_child_process=ini.get_bool("safety","isolate_child_process",true); cc.terminate_grace_ms=ini.get_ll("safety","terminate_grace_ms",2000);
     for(auto s:split_csv(ini.get("stdinctrl","stop_commands","STOP,QUIT,Q")))cc.stop.insert(cc.case_insensitive?lower(s):s);
 #ifdef _WIN32
-    int rc=run_child_windows(real,final_args,cc,log,backend=="metadata");
+    bool hardware_runtime_failure=false;
+    int rc=run_child_windows(real,final_args,cc,log,backend=="metadata",
+                             ini.get_bool("logging","log_ffmpeg_stderr",true),
+                             windows_priority_class(orig),hardware_runtime_failure);
 #else
+    bool hardware_runtime_failure=false;
     int rc=run_child_posix(real,final_args,cc,log,
-        ini.get_bool("logging","log_ffmpeg_stderr",true),backend=="metadata");
+        ini.get_bool("logging","log_ffmpeg_stderr",true),backend=="metadata",
+        hardware_runtime_failure);
 #endif
     log.log("child exit rc=",rc);
+    if(rc!=0 && stdinctrl && hardware_runtime_failure)
+        quarantine_runtime_backend(ini,real,dir/"cache/capabilities",log,
+                                   backend,encoder,rc);
+    else if(rc!=0 && stdinctrl && backend!="software" && is_encode_backend(backend))
+        log.log("hardware runtime quarantine skipped: no device-failure diagnostic backend=",
+                backend," rc=",rc);
     const auto stopped_status=mim_status_record(platform.name,mim_pid,"stopped",backend,
-        encoder,status_hardware_decode,active,input,output_format,started_ms,rc);
+        encoder,status_hardware_decode,active,input,output_format,started_ms,caption_port,rc);
     atomic_write_text(status_dir/"last.json",stopped_status);
     if(is_encode_backend(backend)) atomic_write_text(status_dir/"last-transcode.json",stopped_status);
     std::error_code status_remove_error;
     fs::remove(active_status,status_remove_error);
+    release_caption_side_channel(caption_slot,log);
     // A failed transcoder must be contained as a playback EOF, never promoted
     // into a MiniPlayer/server process failure. SageTV requested -stdinctrl on
     // realtime transcoder jobs, so limit this normalization to that contract.

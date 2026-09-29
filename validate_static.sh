@@ -59,8 +59,8 @@ grep -q 'MIM_NAME=SageTVTranscoder.exe' "$ROOT/code/docker/build_target_unified.
 # Runtime Docker checks belong to the separate opensagetv-vibe-container project.
 # This repository validates only FFmpeg/MIM source, configuration, and output.
 
-# v0.4.9 keeps containment and restores stock FormatParser stream syntax.
-grep -q 'MIM_VERSION = "0.4.9"' "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp"
+# v0.4.10 keeps containment and restores stock FormatParser stream syntax.
+grep -q 'MIM_VERSION = "0.4.10"' "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp"
 grep -q -- '--mim-capabilities' "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp"
 grep -q -- '-sagetvdiscstream' "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp"
 grep -q 'qsv:hw,child_device=' "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp"
@@ -74,6 +74,14 @@ grep -q '^preserve_sagetv_output_contract=true$' "$ROOT/ffmpeg.real.ini"
 grep -q 'const bool hardware_decode=' "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp"
 grep -q '^caption_software_decode=true$' "$ROOT/ffmpeg.real.ini"
 grep -q 'force_caption_software_decode' "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp"
+grep -q 'captionSideChannel' "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp"
+grep -q 'original-video GA94 records' "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp"
+grep -q 'original-video A/53 side-channel gate' "$ROOT/code/mim/tests/run_media_tests.sh"
+grep -q '^\[caption_side_channel\]$' "$ROOT/ffmpeg.real.ini"
+grep -q '^pool_directory=caption-pool$' "$ROOT/ffmpeg.real.ini"
+sed -n '/^\[caption_side_channel\]$/,/^\[/p' "$ROOT/ffmpeg.real.ini" | grep -q '^enabled=false$'
+grep -q 'claim_caption_side_channel' "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp"
+grep -q 'caption-side-channel: released loopback port=' "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp"
 
 grep -q '^isolate_child_process=true$' "$ROOT/ffmpeg.real.ini"
 grep -q '^terminate_grace_ms=2000$' "$ROOT/ffmpeg.real.ini"
@@ -100,5 +108,7 @@ grep -q '^file=./ffmpeg.real.log$' "$ROOT/ffmpeg.real.ini"
 grep -q 'log_name="./ffmpeg.real.log"' "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp"
 grep -q 'remove_opt_value(a,{"-vsync","-fps_mode"})' "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp"
 grep -q "does not contain the SageTV -sagetvratectrl patch marker" "$ROOT/code/docker/build_target_unified.sh"
+grep -q '"\$cxx_command" "\${MIM_FLAGS\[@\]}"' "$ROOT/code/docker/build_target_unified.sh"
+! grep -q '"\${cxx_args\[@\]}" "\${MIM_FLAGS\[@\]}"' "$ROOT/code/docker/build_target_unified.sh"
 
-echo '[PASS] v0.4.9 FFmpeg/MIM static validation'
+echo '[PASS] v0.4.10 FFmpeg/MIM static validation'

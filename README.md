@@ -4,7 +4,7 @@ Modern FFmpeg and SageTV Media Interface Module add-on for Linux/amd64 and
 Windows/amd64. The add-on will be included in the runtime but remain disabled
 until live MiniClient playback passes commissioning tests.
 
-The current add-on version is 0.4.9. It builds both targets in the unified
+The current add-on version is 0.4.10. It builds both targets in the unified
 Ubuntu 26/OpenJDK 11 development container. The FFmpeg source baseline is
 `n9.0.1`; SageTV's runtime `videorateadapt` control is applied as a narrowly
 scoped patch.

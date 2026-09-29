@@ -1,6 +1,27 @@
 # Changelog
 
-## Unreleased
+## 0.4.10 - 2026-09-29
+
+- Added and validated the Direct-session deinterlace policy contract. Linux
+  VAAPI reports and uses full-GPU decode/encode for Auto, On, and Off. Windows
+  Haswell QSV reaches full-GPU with Off and retains the truthful mixed fallback
+  for Auto/On when QSV VPP rejects the interlaced surface contract. Non-Pro
+  Android playback, seek, pause/resume, caption-side-channel, and teardown
+  gates pass against both platforms.
+- Rebuilt both targets and passed static validation plus the complete MIM
+  lifecycle/media install suite. Linux `ffmpeg_MIM` SHA-256 is
+  `79640cb17e6fd25a81920b73721cd417c8761ef50933a525a004c167481943ee`;
+  Windows `SageTVTranscoder.exe` SHA-256 is
+  `916540ab559d2277c2e6ac96998382704266ce7ff4e4e82556d65cc8d24e7d89`.
+- Added a bounded `--mim-hardware-test` JSON diagnostic using a temporary
+  synthetic MPEG-2 fixture. It independently exercises decode, hardware
+  scaling, H.264 encode, the complete GPU pipeline, software fallback, and the
+  Windows D3D11VA-decode/software-scale/QSV-encode compatibility path without
+  reading user media or changing the live INI.
+- Verified on the Windows Intel HD 4600 host that QSV H.264 encode passes but
+  native QSV MPEG-2 decode/filter/full-pipeline initialization fails with MFX
+  session error `-9`. The compatibility path passes; legacy K1100M CUDA/NVENC
+  continues to fail on the missing modern `cuMemAllocAsync` entry point.
 
 - Fixed Windows capability discovery when the plugin runtime is installed
   under `Program Files`. MIM now launches FFmpeg directly with

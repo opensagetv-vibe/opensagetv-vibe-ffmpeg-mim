@@ -29,6 +29,10 @@ trap cleanup EXIT
 INI="$TMP/ffmpeg.real.ini"
 LOG="$TMP/ffmpeg.real.log"
 cp "$OUT/ffmpeg.real.ini" "$INI"
+# Release archives default to disabled and are enabled by the Standard plugin
+# only after a successful transactional install. This isolated integration
+# copy must opt in before exercising the real MIM runtime.
+sed -i '/^\[general\]$/,/^\[/ s/^enabled=false$/enabled=true/' "$INI"
 
 # Keep this integration deterministic on builders with or without a GPU. GPU
 # command construction and hardware commissioning are separate tests; these
@@ -36,7 +40,28 @@ cp "$OUT/ffmpeg.real.ini" "$INI"
 sed -i 's/^backend=auto$/backend=software/' "$INI"
 sed -i 's/^hardware_decode=true$/hardware_decode=false/' "$INI"
 sed -i "s|^directory=cache/probe$|directory=$TMP/probe-cache|" "$INI"
+sed -i "s|^directory=cache/status$|directory=$TMP/status-cache|" "$INI"
 sed -i "s|^file=./ffmpeg.real.log$|file=$LOG|" "$INI"
+
+# The bounded hardware diagnostic uses a real captioned MPEG-2 fixture. Even
+# on a builder without a GPU, its universal software row must prove that the
+# primary transcode and untouched original-video caption output coexist in one
+# FFmpeg process and retain real GA94 records. GPU-equipped commissioning adds
+# the equivalent VAAPI/QSV/NVENC physical rows without weakening this gate.
+HARDWARE_JSON="$(SAGETV_FFMPEG_MIM_INI="$INI" "$MIM" --mim-hardware-test)"
+python3 - "$HARDWARE_JSON" <<'PY'
+import json
+import sys
+
+report = json.loads(sys.argv[1])
+assert report["state"] == "complete", report
+assert report["fixture"].startswith("captioned synthetic MPEG-2"), report["fixture"]
+software = report["backends"]["software"]
+assert software["pipeline"] == "pass", software
+assert software["captionSideChannel"] == "pass", software
+assert "GA94 records" in software["diagnostics"]["captionSideChannel"], software
+PY
+echo '[PASS] real FFmpeg original-video A/53 side-channel gate'
 
 SOURCE_30="$TMP/source-29.97.ts"
 SOURCE_60="$TMP/source-59.94.ts"
@@ -54,12 +79,83 @@ generate_source() {
 generate_source 30000/1001 5 "$SOURCE_30"
 generate_source 60000/1001 6 "$SOURCE_60"
 
+# The Standard plugin's Android-owned Direct Copy session is a bounded HLS
+# representation with MPEG-TS media segments. It must remain a pure remux:
+# neither elementary stream may be decoded or encoded, and MIM must report the
+# actual copy backend rather than inferring success from the requested mode.
+DIRECT_COPY_DIR="$TMP/direct-copy"
+mkdir -p "$DIRECT_COPY_DIR"
+SAGETV_FFMPEG_MIM_INI="$INI" "$MIM" \
+  -hide_banner -loglevel warning -sagetvdirect -re -i "$SOURCE_30" \
+  -map '0:v:0?' -map '0:a?' -map '0:s?' \
+  -c:v copy -c:a copy -c:s copy \
+  -f hls -hls_time 2 -hls_init_time 1 -hls_list_size 90 \
+  -hls_delete_threshold 3 -hls_segment_type mpegts \
+  -hls_flags delete_segments+independent_segments+temp_file \
+  -hls_segment_filename "$DIRECT_COPY_DIR/seg_%06d.ts" \
+  -y "$DIRECT_COPY_DIR/stream.m3u8"
+[[ -s "$DIRECT_COPY_DIR/stream.m3u8" ]]
+direct_copy_streams="$($PROBE -v error -show_entries stream=codec_type,codec_name \
+  -of csv=p=0 "$DIRECT_COPY_DIR/stream.m3u8")"
+grep -q 'mpeg2video,video' <<<"$direct_copy_streams"
+grep -q 'mp2,audio' <<<"$direct_copy_streams"
+direct_copy_status="$(SAGETV_FFMPEG_MIM_INI="$INI" "$MIM" --mim-status)"
+python3 - "$direct_copy_status" <<'PY'
+import json
+import sys
+
+status = json.loads(sys.argv[1])
+job = status.get("lastJob") or {}
+assert job.get("backend") == "copy", job
+assert job.get("encoder") == "copy", job
+assert job.get("hardwareDecode") is False, job
+PY
+grep -q 'compat: SageTV plugin-owned direct media session enabled' "$LOG"
+grep -q 'final backend=copy' "$LOG"
+echo '[PASS] real FFmpeg plugin-owned Direct Copy remux gate'
+
+# Direct Transcode must use MIM's normal backend policy and publish truthful
+# execution state. This deterministic builder gate forces the universal
+# software row; GPU/mixed rows are commissioned on the isolated Intel host.
+DIRECT_TRANSCODE_DIR="$TMP/direct-transcode"
+mkdir -p "$DIRECT_TRANSCODE_DIR"
+SAGETV_FFMPEG_MIM_INI="$INI" "$MIM" \
+  -hide_banner -loglevel warning -sagetvdirect -re -i "$SOURCE_30" \
+  -map '0:v:0?' -map '0:a?' -map '0:s?' \
+  -c:v libx264 -preset veryfast -b:v 2000k -maxrate 3000k -bufsize 6000k \
+  -a53cc 1 -c:a ac3 -b:a 192k -c:s copy \
+  -f hls -hls_time 2 -hls_init_time 1 -hls_list_size 90 \
+  -hls_delete_threshold 3 -hls_segment_type mpegts \
+  -hls_flags delete_segments+independent_segments+temp_file \
+  -hls_segment_filename "$DIRECT_TRANSCODE_DIR/seg_%06d.ts" \
+  -y "$DIRECT_TRANSCODE_DIR/stream.m3u8"
+[[ -s "$DIRECT_TRANSCODE_DIR/stream.m3u8" ]]
+direct_transcode_streams="$($PROBE -v error \
+  -show_entries stream=codec_type,codec_name -of csv=p=0 \
+  "$DIRECT_TRANSCODE_DIR/stream.m3u8")"
+grep -q 'h264,video' <<<"$direct_transcode_streams"
+grep -q 'ac3,audio' <<<"$direct_transcode_streams"
+direct_transcode_status="$(SAGETV_FFMPEG_MIM_INI="$INI" "$MIM" --mim-status)"
+python3 - "$direct_transcode_status" <<'PY'
+import json
+import sys
+
+status = json.loads(sys.argv[1])
+job = status.get("lastTranscodeJob") or {}
+assert job.get("backend") == "software", job
+assert job.get("encoder") == "libx264", job
+assert job.get("hardwareDecode") is False, job
+assert job.get("hardwareEncode") is False, job
+PY
+grep -q 'final backend=software' "$LOG"
+echo '[PASS] real FFmpeg plugin-owned Direct Transcode software gate'
+
 # Exercise the exact stock-era imported-video thumbnail command against the
 # real pinned FFmpeg, not only the argument-rewrite dry run. This catches old
 # crop ordering and removed filter/output options that a fake child accepts.
 THUMBNAIL_OUT="$TMP/legacy-thumbnail.jpg"
 SAGETV_FFMPEG_MIM_INI="$INI" "$MIM" \
-  -hide_banner -loglevel error -y -skip_frame nokey -ss 1 -i "$SOURCE_30" \
+  -hide_banner -loglevel error -y -priority idle -skip_frame nokey -ss 1 -i "$SOURCE_30" \
   -f mjpeg -deinterlace -vf crop=0:8:0:0,scale=512:288 \
   -vframes 1 -an -minpixvar 300 -minpixnumframes 150 -minpixenergy 1 \
   -vsync 0 "$THUMBNAIL_OUT"
@@ -81,7 +177,7 @@ METADATA_MKV="$TMP/metadata-probe.mkv"
   -c:v libx264 -preset ultrafast -c:a copy "$METADATA_MKV"
 set +e
 metadata_output="$(SAGETV_FFMPEG_MIM_INI="$INI" "$MIM" \
-  -dumpmetadata -v 2 -i "$METADATA_MKV" 2>&1)"
+  -priority idle -dumpmetadata -v 2 -i "$METADATA_MKV" 2>&1)"
 metadata_rc=$?
 set -e
 [[ $metadata_rc -ne 127 ]]

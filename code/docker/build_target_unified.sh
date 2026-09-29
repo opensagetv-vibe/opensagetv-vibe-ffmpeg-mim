@@ -77,7 +77,11 @@ echo "Compiler cache: $(command -v ccache 2>/dev/null || echo disabled)"
 echo "================================================================"
 
 # Use the exact configure environment captured from the corresponding actual
-# BtbN FFmpeg-Builds target image.
+# BtbN FFmpeg-Builds target image. The reusable dependency layer currently
+# carries the newer two-argument OpenAPV manager API, while pinned FFmpeg
+# n9.0.1 calls the earlier one-argument API. OpenAPV is outside SageTV's media
+# contract, so disable only that incompatible optional codec rather than let
+# dependency drift break both target builds.
 # shellcheck disable=SC2086
 ./configure \
   --prefix="$PREFIX" \
@@ -88,12 +92,13 @@ echo "================================================================"
   --extra-libs="${FF_LIBS:-}" \
   --extra-ldflags="${FF_LDFLAGS:-${LDFLAGS:-}}" \
   --extra-ldexeflags="${FF_LDEXEFLAGS:-}" \
+  --disable-liboapv \
   --cc="${cc_args[*]}" \
   --cxx="${cxx_args[*]}" \
   --ar="${AR:-ar}" \
   --ranlib="${RANLIB:-ranlib}" \
   --nm="${NM:-nm}" \
-  --extra-version="sagetv-mim-v0.4.9" \
+  --extra-version="sagetv-mim-v0.4.10" \
   || { cat ffbuild/config.log; exit 1; }
 
 JOBS="${BUILD_JOBS:-0}"
@@ -121,7 +126,13 @@ if [[ "$TARGET_ID" == linux-x64 ]]; then
   cp "$PROJECT/diagnose_sagetv_abort.sh" "$OUT/diagnose_sagetv_abort.sh"
 fi
 
-"${cxx_args[@]}" "${MIM_FLAGS[@]}" \
+# MIM is a single, fast translation unit whose behavior is the public SageTV
+# runtime contract. Compile it directly instead of through the shared FFmpeg
+# ccache: a stale cross-target cache entry previously produced a package whose
+# binary did not match the current deinterlace-policy source. FFmpeg retains
+# ccache acceleration; this direct compile makes MIM source changes observable
+# and deterministic in every package build.
+"$cxx_command" "${MIM_FLAGS[@]}" \
   "$PROJECT/code/mim/sagetv_ffmpeg_mim.cpp" \
   -o "$OUT/$MIM_NAME"
 
@@ -132,7 +143,7 @@ else
 fi
 
 {
-  echo "SageTV FFmpeg MIM v0.4.9"
+  echo "SageTV FFmpeg MIM v0.4.10"
   echo "build_environment=${OPENSAGETV_VIBE_BUILD_ENV_VERSION:-unknown}"
   echo "ffmpeg_toolchain=${OPENSAGETV_VIBE_FFMPEG_TOOLCHAIN:-unknown}"
   echo "target=$TARGET_ID"

@@ -56,6 +56,10 @@ echo 'format|format_name=mpegts'
 SH
 chmod +x "$TMP/ffprobe"
 cp "$ROOT/ffmpeg.real.ini" "$TMP/ffmpeg.real.ini"
+# The shipped plugin payload is intentionally inert until the Standard plugin
+# completes installation. Unit tests opt in explicitly so a secure release
+# default is not weakened merely to exercise runtime behavior.
+sed -i '/^\[general\]$/,/^\[/ s/^enabled=false$/enabled=true/' "$TMP/ffmpeg.real.ini"
 grep -q '^cached_probesize=524288$' "$TMP/ffmpeg.real.ini"
 grep -q '^cached_analyzeduration=500000$' "$TMP/ffmpeg.real.ini"
 grep -q '^cached_max_probe_packets=1024$' "$TMP/ffmpeg.real.ini"
@@ -75,9 +79,9 @@ printf '\x47' > "$TMP/media/test.ts"
 printf '\x1a\x45\xdf\xa3' > "$TMP/media/test.mkv"
 
 v="$($TMP/ffmpeg --mim-version)"
-[[ "$v" == *"SageTV FFmpeg MIM 0.4.9"* ]]
+[[ "$v" == *"SageTV FFmpeg MIM 0.4.10"* ]]
 c="$($TMP/ffmpeg --mim-capabilities)"
-[[ "$c" == *'"mimVersion":"0.4.9"'* ]]
+[[ "$c" == *'"mimVersion":"0.4.10"'* ]]
 [[ "$c" == *'"dvdStreamTransform":true'* ]]
 python3 - "$c" <<'PY'
 import json
@@ -105,7 +109,7 @@ PY
 cp "$TMP/ffmpeg.real.ini" "$TMP/disabled.ini"
 sed -i 's/^enabled=true$/enabled=false/' "$TMP/disabled.ini"
 c="$(SAGETV_FFMPEG_MIM_INI="$TMP/disabled.ini" "$TMP/ffmpeg" --mim-capabilities)"
-[[ "$c" == *'"mimVersion":"0.4.9"'* ]]
+[[ "$c" == *'"mimVersion":"0.4.10"'* ]]
 mkdir -p "$TMP/missing-real"
 cp "$TMP/ffmpeg" "$TMP/missing-real/ffmpeg"
 cp "$TMP/ffmpeg.real.ini" "$TMP/missing-real/ffmpeg.real.ini"
@@ -132,16 +136,40 @@ d="$($TMP/ffmpeg --mim-dry-run --version)"
 [[ "$d" != *" --version"* ]]
 [[ "$d" != *"probesize"* ]]
 
+# A stock-compatible Standard plugin advertises a loopback listener by placing
+# a validated slot in the shared status directory. A realtime transcode claims
+# exactly one slot, adds a separate original-video stream-copy output, records
+# only the non-secret port in status, and removes its claim on teardown. With
+# no slot, the established command remains unchanged.
+CAPTION_POOL="$TMP/cache/status/caption-pool"
+mkdir -p "$CAPTION_POOL"
+CAPTION_TOKEN=0123456789abcdef0123456789abcdef
+sed -i '/^\[caption_side_channel\]$/,/^\[/ s/^enabled=false$/enabled=true/' "$TMP/ffmpeg.real.ini"
+touch "$CAPTION_POOL/available-39001-$CAPTION_TOKEN.slot"
+side="$({ sleep .2; printf 'STOP\n'; } | $TMP/ffmpeg -stdinctrl -i "$TMP/media/test.ts" -vcodec mpeg4 -b 4M -f mpegts -)"
+[[ "$side" == *"<-map> <0:v:0?> <-c:v> <copy> <-an> <-sn> <-dn> <-f> <mpegts> <udp://127.0.0.1:39001?pkt_size=1316&buffer_size=1048576&connect=0>"* ]]
+[[ ! -e "$CAPTION_POOL/available-39001-$CAPTION_TOKEN.slot" ]]
+! compgen -G "$CAPTION_POOL/job-*.slot" >/dev/null
+s="$($TMP/ffmpeg --mim-status)"
+[[ "$s" == *'"captionSideChannel":true'* ]]
+[[ "$s" == *'"captionPort":39001'* ]]
+[[ "$s" != *"$CAPTION_TOKEN"* ]]
+grep -q 'caption-side-channel: claimed loopback port=39001' "$TMP/ffmpeg.real.log"
+grep -q 'caption-side-channel: released loopback port=39001' "$TMP/ffmpeg.real.log"
+side="$({ sleep .2; printf 'STOP\n'; } | $TMP/ffmpeg -stdinctrl -i "$TMP/media/test.ts" -vcodec mpeg4 -b 4M -f mpegts -)"
+[[ "$side" != *"udp://127.0.0.1:"* ]]
+
 # SageTV-specific -dumpmetadata must be translated for modern FFmpeg rather
 # than passed through as an unknown option.  SageTV intentionally requests
 # -v 2, so MIM forces info logging to expose Input/Duration/Stream lines.
-d="$($TMP/ffmpeg --mim-dry-run -dumpmetadata -v 2 -i "$TMP/media/test.ts")"
+d="$($TMP/ffmpeg --mim-dry-run -priority idle -dumpmetadata -v 2 -i "$TMP/media/test.ts")"
 [[ "$d" == *"backend=metadata"* ]]
 [[ "$d" != *"-dumpmetadata"* ]]
+[[ "$d" != *"-priority"* ]]
 [[ "$d" == *"-loglevel info"* ]]
 [[ "$d" == *"-i $TMP/media/test.ts"* ]]
 [[ -f "$TMP/ffmpeg.real.log" ]]
-grep -q 'mim-start version=0.4.9' "$TMP/ffmpeg.real.log"
+grep -q 'mim-start version=0.4.10' "$TMP/ffmpeg.real.log"
 
 # Modern FFmpeg emits colon-delimited stream indexes. Stock SageTV's
 # FormatParser accepts the historical dot-delimited form, so only metadata
@@ -174,12 +202,13 @@ set -e
 # SageTV's private thumbnail frame-selection switches were removed upstream.
 # MIM must drop their option/value pairs while preserving the ordinary MJPEG
 # thumbnail command on modern FFmpeg.
-d="$($TMP/ffmpeg --mim-dry-run -y -skip_frame nokey -i "$TMP/media/test.ts" -f mjpeg -deinterlace -vf crop=0:8:0:0,scale=512:288 -vframes 1 -an -minpixvar 300 -minpixnumframes 150 -vsync 0 "$TMP/thumb.jpg")"
+d="$($TMP/ffmpeg --mim-dry-run -y -priority idle -skip_frame nokey -i "$TMP/media/test.ts" -f mjpeg -deinterlace -vf crop=0:8:0:0,scale=512:288 -vframes 1 -an -minpixvar 300 -minpixnumframes 150 -vsync 0 "$TMP/thumb.jpg")"
 [[ "$d" == *"backend=passthrough"* ]]
 [[ "$d" != *"minpixvar"* ]]
 [[ "$d" != *"minpixnumframes"* ]]
 [[ "$d" != *"-vsync"* ]]
 [[ "$d" != *"-deinterlace"* ]]
+[[ "$d" != *"-priority"* ]]
 [[ "$d" == *"-fps_mode passthrough"* ]]
 [[ "$d" == *"-vf yadif,crop=iw:ih-8:0:8,scale=512:288"* ]]
 [[ "$d" == *"-f mjpeg"* ]]
@@ -193,6 +222,97 @@ grep -q 'compat: removed obsolete SageTV thumbnail frame-selection options' "$TM
 grep -q 'compat: translated legacy -vsync to -fps_mode passthrough' "$TMP/ffmpeg.real.log"
 grep -q 'compat: translated legacy thumbnail -deinterlace to yadif' "$TMP/ffmpeg.real.log"
 grep -q 'compat: translated legacy SageTV thumbnail crop order' "$TMP/ffmpeg.real.log"
+grep -q 'compat: translated legacy SageTV -priority to child process scheduling' "$TMP/ffmpeg.real.log"
+
+# Fixed MiniPlayer jobs carry the same private priority option. It must be
+# removed before backend selection and must never reach modern FFmpeg.
+d="$($TMP/ffmpeg --mim-dry-run -v 3 -y -threads 2 -sn -vsync 0 -async 1 -stdinctrl -i "$TMP/media/test.ts" -threads 7 -f mpegts -vcodec mpeg4 -b 4000000 -r 29.97 -s 1920x1080 -g 300 -bf 0 -acodec aac -ab 128000 -ar 48000 -ac 2 -packetsize 1024 -aspect 16:9 -deinterlace -muxrate 2000000 -rc_init_cplx 130 -maxrate 4000000 -minrate 0 -bufsize 4000000 -mbd 2 -priority belownormal -)"
+[[ "$d" != *"-priority"* ]]
+[[ "$d" == *"backend=qsv"* ]]
+[[ "$d" == *"-c:v h264_qsv"* ]]
+[[ "$d" != *"-sn"* ]]
+[[ "$d" == *"-map 0:s?"* ]]
+[[ "$d" == *"-c:s copy"* ]]
+grep -q 'compat: preserved MPEG-TS DVB/Teletext subtitle streams' "$TMP/ffmpeg.real.log"
+
+# Subtitle preservation is narrowly scoped to MPEG-TS output. A legacy
+# Matroska Fixed profile must retain SageTV's explicit subtitle suppression.
+d="$($TMP/ffmpeg --mim-dry-run -v 3 -y -sn -stdinctrl -i "$TMP/media/test.ts" -f matroska -vcodec mpeg4 -acodec aac -)"
+[[ "$d" == *"-sn"* ]]
+[[ "$d" != *"-map 0:s?"* ]]
+[[ "$d" != *"-c:s copy"* ]]
+
+# The stock-compatible Standard plugin marks its independently owned Android
+# media session explicitly. MIM must recognize that bounded job, remove the
+# private marker before invoking FFmpeg, preserve the caller's HLS/MPEG-TS
+# contract, and distinguish copy from transcode without changing unrelated
+# FFmpeg commands.
+d="$($TMP/ffmpeg --mim-dry-run -sagetvdirect -re -i "$TMP/media/test.ts" -map '0:v:0?' -map '0:a?' -map '0:s?' -c:v copy -c:a copy -c:s copy -f hls -hls_segment_type mpegts "$TMP/direct-copy.m3u8")"
+[[ "$d" == *"backend=copy"* ]]
+[[ "$d" != *"-sagetvdirect"* ]]
+[[ "$d" == *"-c:v copy"* ]]
+[[ "$d" == *"-c:a copy"* ]]
+[[ "$d" == *"-c:s copy"* ]]
+[[ "$d" == *"-f hls"* ]]
+[[ "$d" == *"-hls_segment_type mpegts"* ]]
+[[ "$d" != *"h264_qsv"* ]]
+
+# Windows-owned Direct/DVD sessions keep the selected QSV hardware encoder but
+# default to the compatibility decode/deinterlace path. Real Haswell drivers
+# can pass encoder preflight and then reject the first 1080i QSV texture pool.
+# This OS-scoped default prevents a silent Pull fallback while retaining an
+# explicit opt-in for newer Windows hardware that passes representative media.
+cp "$TMP/ffmpeg.real.ini" "$TMP/ffmpeg.windows-direct.ini"
+sed -i 's/^force_platform=auto$/force_platform=windows-x64/' "$TMP/ffmpeg.windows-direct.ini"
+# The platform override intentionally exercises Windows policy while this unit
+# test itself runs on Linux. Mirror the configured Windows relative filenames
+# so executable resolution remains part of the test rather than being bypassed.
+cp "$TMP/ffmpeg.real" "$TMP/.\\ffmpeg.real.exe"
+cp "$TMP/ffprobe" "$TMP/.\\ffprobe.exe"
+d="$(SAGETV_FFMPEG_MIM_INI="$TMP/ffmpeg.windows-direct.ini" "$TMP/ffmpeg" --mim-dry-run -sagetvdirect -stdinctrl -re -i "$TMP/media/test.ts" -map '0:v:0?' -map '0:a?' -map '0:s?' -c:v libx264 -c:a ac3 -c:s copy -f segment "$TMP/windows-direct.m3u8")"
+[[ "$d" == *"backend=qsv"* ]]
+[[ "$d" != *"-sagetvdirect"* ]]
+[[ "$d" != *"-sagetvdeinterlace"* ]]
+[[ "$d" != *"-hwaccel qsv"* ]]
+[[ "$d" != *"-hwaccel_output_format qsv"* ]]
+[[ "$d" == *"-vf yadif=deint=interlaced,format=nv12"* ]]
+[[ "$d" == *"-c:v h264_qsv"* ]]
+
+d="$(SAGETV_FFMPEG_MIM_INI="$TMP/ffmpeg.windows-direct.ini" "$TMP/ffmpeg" --mim-dry-run -sagetvdirect -sagetvdeinterlace on -stdinctrl -re -i "$TMP/media/test.ts" -map '0:v:0?' -map '0:a?' -c:v libx264 -c:a ac3 -f segment "$TMP/windows-direct-deinterlace-on.m3u8")"
+[[ "$d" != *"-sagetvdeinterlace"* ]]
+[[ "$d" != *"-hwaccel qsv"* ]]
+[[ "$d" == *"-vf yadif=deint=interlaced,format=nv12"* ]]
+
+# Explicit Direct deinterlace Off removes the quarantined Windows VPP stage
+# and therefore permits the otherwise validated QSV decode->encode path.
+d="$(SAGETV_FFMPEG_MIM_INI="$TMP/ffmpeg.windows-direct.ini" "$TMP/ffmpeg" --mim-dry-run -sagetvdirect -sagetvdeinterlace off -stdinctrl -re -i "$TMP/media/test.ts" -map '0:v:0?' -map '0:a?' -c:v libx264 -c:a ac3 -f segment "$TMP/windows-direct-no-deinterlace.m3u8")"
+[[ "$d" == *"backend=qsv"* ]]
+[[ "$d" != *"-sagetvdeinterlace"* ]]
+[[ "$d" == *"-hwaccel qsv"* ]]
+[[ "$d" == *"-hwaccel_output_format qsv"* ]]
+[[ "$d" != *"deinterlace_qsv"* ]]
+[[ "$d" != *"yadif="* ]]
+[[ "$d" == *"-c:v h264_qsv"* ]]
+
+sed -i 's/^windows_direct_hardware_decode=false$/windows_direct_hardware_decode=true/' "$TMP/ffmpeg.windows-direct.ini"
+d="$(SAGETV_FFMPEG_MIM_INI="$TMP/ffmpeg.windows-direct.ini" "$TMP/ffmpeg" --mim-dry-run -sagetvdirect -stdinctrl -re -i "$TMP/media/test.ts" -map '0:v:0?' -map '0:a?' -c:v libx264 -c:a ac3 -f segment "$TMP/windows-direct-full-gpu.m3u8")"
+[[ "$d" == *"-hwaccel qsv"* ]]
+[[ "$d" == *"-hwaccel_output_format qsv"* ]]
+[[ "$d" == *"-vf deinterlace_qsv"* ]]
+grep -q 'compat: SageTV plugin-owned direct media session enabled' "$TMP/ffmpeg.real.log"
+
+d="$($TMP/ffmpeg --mim-dry-run -sagetvdirect -stdinctrl -re -i "$TMP/media/test.ts" -map '0:v:0?' -map '0:a?' -map '0:s?' -c:v libx264 -c:a ac3 -c:s copy -f hls -hls_segment_type mpegts "$TMP/direct-transcode.m3u8")"
+[[ "$d" == *"backend=qsv"* ]]
+[[ "$d" != *"-sagetvdirect"* ]]
+[[ "$d" == *"-hwaccel qsv"* ]]
+[[ "$d" == *"-hwaccel_device hw"* ]]
+[[ "$d" == *"-hwaccel_output_format qsv"* ]]
+[[ "$d" == *"-vf deinterlace_qsv"* ]]
+[[ "$d" == *"-c:v h264_qsv"* ]]
+[[ "$d" == *"-c:a ac3"* ]]
+[[ "$d" == *"-c:s copy"* ]]
+[[ "$d" == *"-f hls"* ]]
+[[ "$d" == *"-hls_segment_type mpegts"* ]]
 
 # The explicit DISC stream marker makes a VM-produced MPEG-PS pipe a SageTV
 # transcode job without sharing stdin with -stdinctrl. Input and output -f
@@ -205,6 +325,10 @@ d="$("$TMP/ffmpeg" --mim-dry-run -sagetvdiscstream -f mpeg -i - -map 0:v:0 -map 
 [[ "$d" == *"-f mpegts -"* ]]
 [[ "$d" == *"-c:v h264_qsv"* ]]
 [[ "$d" == *"-c:s dvbsub"* ]]
+[[ "$d" == *"-hwaccel qsv"* ]]
+[[ "$d" == *"-hwaccel_device hw"* ]]
+[[ "$d" == *"-hwaccel_output_format qsv"* ]]
+[[ "$d" == *"-vf deinterlace_qsv"* ]]
 
 # A normal non-SageTV encode command remains transparent even if it uses a mapped codec.
 d="$($TMP/ffmpeg --mim-dry-run -i "$TMP/media/test.ts" -c:v libx264 -f null -)"
@@ -351,6 +475,7 @@ d="$($TMP/ffmpeg --mim-dry-run -v 3 -y -threads 2 -sn -vsync 1 -async 100 \
 # Caption preservation deliberately keeps GPU filtering/encoding but decodes in
 # software because hardware MPEG-2 decode can drop A/53 frame side data.
 cp "$ROOT/ffmpeg.real.ini" "$TMP/ffmpeg.hwdecode.ini"
+sed -i '/^\[general\]$/,/^\[/ s/^enabled=false$/enabled=true/' "$TMP/ffmpeg.hwdecode.ini"
 sed -i 's/^backend=auto$/backend=qsv/' "$TMP/ffmpeg.hwdecode.ini"
 sed -i 's/^hardware_decode=false$/hardware_decode=true/' "$TMP/ffmpeg.hwdecode.ini"
 d="$(SAGETV_FFMPEG_MIM_INI="$TMP/ffmpeg.hwdecode.ini" "$TMP/ffmpeg" --mim-dry-run -stdinctrl -i "$TMP/media/test.ts" -vcodec mpeg4 -s 1280x720 -b 4M -f mpegts -)"
@@ -375,6 +500,7 @@ d="$(SAGETV_FFMPEG_MIM_INI="$TMP/ffmpeg.hwdecode.ini" "$TMP/ffmpeg" --mim-dry-ru
 
 # NVENC retains GPU encode but defaults to caption-preserving software decode.
 cp "$ROOT/ffmpeg.real.ini" "$TMP/ffmpeg.nvenc.ini"
+sed -i '/^\[general\]$/,/^\[/ s/^enabled=false$/enabled=true/' "$TMP/ffmpeg.nvenc.ini"
 sed -i 's/^backend=auto$/backend=nvenc/' "$TMP/ffmpeg.nvenc.ini"
 sed -i 's/^hardware_decode=false$/hardware_decode=true/' "$TMP/ffmpeg.nvenc.ini"
 d="$(SAGETV_FFMPEG_MIM_INI="$TMP/ffmpeg.nvenc.ini" "$TMP/ffmpeg" --mim-dry-run -stdinctrl -i "$TMP/media/test.ts" -vcodec mpeg4 -s 1280x720 -b 4M -f mpegts -)"
@@ -397,6 +523,7 @@ d="$(SAGETV_FFMPEG_MIM_INI="$TMP/ffmpeg.nvenc.ini" "$TMP/ffmpeg" --mim-dry-run -
 # Merely selecting h264_vaapi with system-memory frames fails before video is
 # emitted, which previously presented as audio-only playback.
 cp "$ROOT/ffmpeg.real.ini" "$TMP/ffmpeg.vaapi-sw.ini"
+sed -i '/^\[general\]$/,/^\[/ s/^enabled=false$/enabled=true/' "$TMP/ffmpeg.vaapi-sw.ini"
 sed -i 's/^backend=auto$/backend=vaapi/' "$TMP/ffmpeg.vaapi-sw.ini"
 sed -i 's/^hardware_decode=true$/hardware_decode=false/' "$TMP/ffmpeg.vaapi-sw.ini"
 d="$(SAGETV_FFMPEG_MIM_INI="$TMP/ffmpeg.vaapi-sw.ini" "$TMP/ffmpeg" --mim-dry-run -stdinctrl -i "$TMP/media/test.ts" -vcodec mpeg4 -s 1280x720 -b 4M -f mpegts -)"
@@ -410,6 +537,7 @@ d="$(SAGETV_FFMPEG_MIM_INI="$TMP/ffmpeg.vaapi-sw.ini" "$TMP/ffmpeg" --mim-dry-ru
 
 # Full VAAPI decode keeps the filters and encoder on VAAPI frames.
 cp "$ROOT/ffmpeg.real.ini" "$TMP/ffmpeg.vaapi-hw.ini"
+sed -i '/^\[general\]$/,/^\[/ s/^enabled=false$/enabled=true/' "$TMP/ffmpeg.vaapi-hw.ini"
 sed -i 's/^backend=auto$/backend=vaapi/' "$TMP/ffmpeg.vaapi-hw.ini"
 sed -i 's/^hardware_decode=false$/hardware_decode=true/' "$TMP/ffmpeg.vaapi-hw.ini"
 sed -i 's/^caption_software_decode=true$/caption_software_decode=false/' "$TMP/ffmpeg.vaapi-hw.ini"
@@ -439,6 +567,7 @@ mkdir -p "$TMP/preflight"
 cp "$MIM" "$TMP/preflight/ffmpeg"
 cp "$TMP/ffprobe" "$TMP/preflight/ffprobe"
 cp "$ROOT/ffmpeg.real.ini" "$TMP/preflight/ffmpeg.real.ini"
+sed -i '/^\[general\]$/,/^\[/ s/^enabled=false$/enabled=true/' "$TMP/preflight/ffmpeg.real.ini"
 sed -i 's/^backend=auto$/backend=qsv/' "$TMP/preflight/ffmpeg.real.ini"
 cat > "$TMP/preflight/ffmpeg.real" <<'SH'
 #!/usr/bin/env bash
@@ -639,6 +768,7 @@ grep -q 'safety: parent-death SIGKILL configured for ffmpeg child' "$TMP/ffmpeg.
 cat > "$TMP/ffmpeg.real" <<'SH'
 #!/usr/bin/env bash
 if [[ " $* " == *" -encoders "* ]]; then printf ' V....D h264_qsv\n V..... libx264\n'; exit 0; fi
+printf 'Error during encoding: device failed (-17)\n' >&2
 exit 42
 SH
 chmod +x "$TMP/ffmpeg.real"
@@ -652,6 +782,15 @@ grep -q 'contained ffmpeg failure rc=42 -> MIM exit rc=0' "$TMP/ffmpeg.real.log"
   tail -80 "$TMP/ffmpeg.real.log" >&2
   exit 1
 }
+
+# A hardware encoder can pass the one-frame preflight and still fail under a
+# sustained real workload. The failed backend is temporarily quarantined, and
+# the next mapped job must select the software fallback instead of retrying the
+# same broken hardware path.
+grep -q 'quarantined failed hardware backend=qsv encoder=h264_qsv rc=42' "$TMP/ffmpeg.real.log"
+d="$($TMP/ffmpeg --mim-dry-run -stdinctrl -i "$TMP/media/test.ts" -vcodec mpeg4 -b 4M -f mpegts -)"
+grep -q '^backend=software$' <<<"$d"
+grep -q 'hardware runtime quarantine HIT backend=qsv encoder=h264_qsv' "$TMP/ffmpeg.real.log"
 
 # Closing FFmpeg stdin before a forwarded runtime-control command must not kill
 # the MIM with SIGPIPE. The broken control pipe is logged and contained.
