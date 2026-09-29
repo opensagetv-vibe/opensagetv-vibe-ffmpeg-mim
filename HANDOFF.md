@@ -1,6 +1,6 @@
 # Handoff
 
-## 0.4.10 release candidate (2026-09-29)
+## 0.4.10 public prerelease (2026-09-29)
 
 The affected MIM behavior suite, static contracts, and full Linux/Windows
 runtime builds pass against FFmpeg n9.0.1. Deterministic SageTV runtime packages
@@ -12,6 +12,9 @@ were produced with these SHA-256 values:
 The paired FFmpeg Standard plugin 0.1.3 source, stock-JAR contracts, launchers,
 and deterministic packages also pass. Unrelated hardware/device matrices were
 not repeated under the impact-based release policy.
+
+The public v0.4.10 prerelease contains both runtime packages. Downloaded assets
+match the hashes above, and the current GitHub repository workflow passes.
 
 ## Standard takeover
 
