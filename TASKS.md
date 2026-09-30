@@ -1,7 +1,13 @@
 # OpenSageTV Vibe FFmpeg/MIM tasks
 
-This is the only active FFmpeg/MIM backlog. Completed work is removed and
-recorded in `CHANGELOG.md` and `HANDOFF.md`.
+> **Pre-commit task maintenance:** Immediately before every repository commit, move
+> completed `[x]` items out of active sections and into
+> `## Checklist change ledger`. Preserve IDs, evidence, and context; never
+> discard completion history. Active sections contain unchecked work only.
+
+This is the only active FFmpeg/MIM backlog. Completed work moves to the
+checklist change ledger; release evidence is also recorded in `CHANGELOG.md`
+and `HANDOFF.md`.
 
 
 - [ ] Finish isolated-server commissioning of the locally passing stock-era
@@ -52,6 +58,19 @@ recorded in `CHANGELOG.md` and `HANDOFF.md`.
   stream/program changes, EOF, and repeated teardown without duplicate
   captions, timestamp regressions, leaked processes, or synthetic caption
   insertion into real media.
+## Checklist change ledger
+
+
+### Archived completed checklist items (2026-09-30)
+
+These completed items were moved from active task sections immediately
+before commit. Stable IDs, acceptance evidence, and source context are
+preserved; active sections contain unchecked work only.
+
+#### From `# OpenSageTV Vibe FFmpeg/MIM tasks`
+
+Parent context: `- [ ] **MIM-FIXED-003 - Caption/subtitle transport gates.** Verify that CEA`
+
   - [x] Linux VAAPI Direct Transcode passes full-GPU decode and encode with
     deinterlacing Auto, On, and Off. Windows Haswell QSV passes full-GPU with
     Off and accurately reports the mixed fallback for Auto/On. The Off policy

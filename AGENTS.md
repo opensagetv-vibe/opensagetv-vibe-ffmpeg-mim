@@ -2,8 +2,9 @@
 
 Read `README.md`, `HANDOFF.md`, `TASKS.md`, and `WORKFLOW.md` first. Use the
 single unified builder and keep MIM disabled by default until physical Android
-playback and all GPU gates pass. `TASKS.md` is the only local backlog; remove
-completed items and update `CHANGELOG.md`/`HANDOFF.md` with evidence.
+playback and all GPU gates pass. `TASKS.md` is the only local backlog; move
+completed items to its checklist change ledger and update
+`CHANGELOG.md`/`HANDOFF.md` with evidence.
 
 Preserve FFmpeg pins, Linux/Windows outputs, LF settings, growing-file behavior,
 option ordering, rollback, and software fallback. Do not create standalone
@@ -28,3 +29,13 @@ requires it, and document that reason and scope.
   expressed through the stock plugin/API boundary. Document the proven API
   gap, keep the extension optional and negotiated with a safe stock fallback,
   and verify older clients and installations remain unaffected.
+
+## Pre-commit task-list maintenance
+
+Immediately before every repository commit, clean `TASKS.md`: move every
+completed `[x]` item out of the active task sections and into
+`## Checklist change ledger`. Preserve stable IDs, acceptance evidence, order,
+and enough source/parent context to understand the result. Never delete
+completion history. Active task sections must contain unchecked work only;
+checked boxes may appear only inside the checklist change ledger. Regenerate
+the project manifest when the repository tracks one.
