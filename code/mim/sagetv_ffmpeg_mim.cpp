@@ -1076,7 +1076,7 @@ static void print_mim_capabilities(const fs::path& executable_dir, const Ini& in
               << "\",\"platform\":\"" << json_escape(platform.name)
               << "\",\"ffmpegVersion\":\"" << json_escape(ffmpeg_version)
               << "\",\"selectedBackend\":\"" << json_escape(selected)
-              << "\",\"dvdStreamTransform\":true,\"dvdVideoDemux\":true,\"backends\":{";
+              << "\",\"dvdStreamTransform\":true,\"dvdVideoDemux\":true,\"ownedDirectStreams\":true,\"backends\":{";
     for(size_t index=0;index<states.size();++index) {
         const auto& state=states[index];
         if(index) std::cout << ',';

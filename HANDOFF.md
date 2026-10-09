@@ -1,5 +1,34 @@
 # Handoff
 
+## MIM-DIRECT-CAP-001 (2026-10-08)
+
+Stock175's old plugin wrapper forwarded private Direct options into FFmpeg,
+causing exit8 before video. Add explicit ownedDirectStreams=true; plugin
+requires this typed feature, not executable presence. Affected MIM CLI,
+mapping, lifecycle and crash-containment suite passes. Only plugin-owned175
+runtime was upgraded: static MIM6e80a2d9, FFmpegceaf236a, probeb9b6bed1.
+Actual-container execution/ABI preflight passes, rollback copies retained,
+INI unchanged during binary replacement, stock Sage.jar/root FFmpeg unchanged.
+This is a test candidate, not a canonical rebuilt/published runtime package.
+Normal owned175 playback and both fallback paths now pass;232 VAAPI hardware
+decode/encode is confirmed, with unchanged protected files and rollback copies.
+MIM-DIRECT-CAP-001 source/Linux commissioning closes. Canonical paired Linux/
+Windows release payloads still require the existing release-build gate before
+publication; no new Windows runtime or whole-platform matrix claim.
+
+## MIM-FIXED-003 transport closure (2026-10-05)
+
+The caption/subtitle transport gate is complete. Prior Linux and Windows
+physical runs cover the timed CEA side channel, preserved Teletext/DVB MPEG-TS
+PIDs, completed and growing MPEG-2/H.264 sources, language/service changes,
+seek, pause/resume, channel/program replacement, fallback, EOF, repeated
+teardown, and zero-orphan cleanup. The final replacement-HD200 run on stock
+`.175` retained normal legacy MPEG-2/CEA, H.264/AC-3, authored-DVD, STOP/Home,
+and growing channel-transition behavior. The lack of legacy Teletext/DVB
+rendering was reproduced as the stock 2010-era FFmpeg boundary, not a MIM
+regression. Stock `Sage.jar` was unchanged. Local physical evidence is indexed
+at workspace `artifacts/mimfix003-hd200/RESULTS.md`.
+
 ## 0.4.10 public prerelease (2026-09-29)
 
 The affected MIM behavior suite, static contracts, and full Linux/Windows

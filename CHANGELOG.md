@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- Advertise explicit ownedDirectStreams support so the Standard plugin can
+  refuse older wrappers that forward Direct/deinterlace markers into FFmpeg.
+  Affected CLI/mapping/lifecycle/crash-containment suite passes; plugin-owned
+  stock175 candidate has execution/ABI preflight and preserves INI/Core/stock
+  FFmpeg. Actual owned playback/recovery qualification remains pending.
+
+- Close MIM-FIXED-003 caption/subtitle transport validation using the existing
+  Linux/Windows Direct and caption gates plus the final stock `.175` HD200
+  compatibility run. Timed CEA, preserved Teletext/DVB PIDs, completed/growing
+  lifecycle, program transitions, fallback, and cleanup pass; the extender
+  remains on its unchanged legacy path.
+
 ## 0.4.10 - 2026-09-29
 
 - Added and validated the Direct-session deinterlace policy contract. Linux

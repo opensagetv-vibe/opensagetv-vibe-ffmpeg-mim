@@ -89,6 +89,7 @@ import sys
 
 caps = json.loads(sys.argv[1])
 assert caps["platform"] == "linux-x64"
+assert caps["ownedDirectStreams"] is True
 assert caps["selectedBackend"] in {"qsv", "nvenc", "vaapi", "software", "unavailable"}
 assert "ffmpegVersion" in caps
 assert list(caps["backends"]) == ["vaapi", "qsv", "nvenc", "amf", "d3d12va", "software"]

@@ -9,7 +9,6 @@ This is the only active FFmpeg/MIM backlog. Completed work moves to the
 checklist change ledger; release evidence is also recorded in `CHANGELOG.md`
 and `HANDOFF.md`.
 
-
 - [ ] Finish isolated-server commissioning of the locally passing stock-era
   thumbnail command compatibility. MIM now removes the historical private
   frame-selection options, maps numeric `-vsync`, replaces the removed
@@ -51,14 +50,36 @@ and `HANDOFF.md`.
   hardware encode with software decode/filters -> software. Require a unique
   session token, reconnect and live growth; a failed direct session must
   terminate cleanly and permit ordinary stock Fixed playback.
-- [ ] **MIM-FIXED-003 - Caption/subtitle transport gates.** Verify that CEA
-  uses the timed side channel while Teletext and DVB bitmap subtitle PIDs are
-  preserved independently in applicable MPEG-TS output. Test completed/live
-  MPEG-2 and H.264 sources, multiple languages/services, pause/resume, seek,
-  stream/program changes, EOF, and repeated teardown without duplicate
-  captions, timestamp regressions, leaked processes, or synthetic caption
-  insertion into real media.
 ## Checklist change ledger
+
+- 2026-10-08 pre-commit source-sync review: explicit owned-Direct capability
+  source/Linux commissioning is retained; static and argument/lifecycle/crash-
+  containment gates pass. Matching canonical Windows/Linux runtime publication
+  is not part of this Android release. Completed entries ledger-only; order305.
+
+- [x] **MIM-DIRECT-CAP-001 - Explicit owned-Direct runtime feature gate.**
+  Parent Android TABLET-MIM-001 / FFmpeg Plugin MIM-DIRECT-005. Proven old175
+  wrapper forwarded private Direct markers into FFmpeg (exit8). Add typed
+  ownedDirectStreams capability; plugin rejects absent/false/untyped/unrelated
+  feature. CLI/mapping/lifecycle/crash-containment tests pass; plugin-owned Linux
+  candidate6e80a2d9 actual175/232 execution/ABI checks preserve INI/Core/root
+  FFmpeg and rollback files.175 real owned playback and both failure recovery
+  paths pass;232 VAAPI full decode/encode is verified. No unrelated matrix.
+  This closes the source/Linux commissioning gate, not canonical publication:
+  rebuild matching Linux/Windows release payloads under the existing release
+  gates before shipping this new feature; no new Windows binary was deployed.
+
+- [x] **MIM-FIXED-003 - Caption/subtitle transport gates (2026-10-05).** CEA
+  uses the timed side channel while applicable Direct MPEG-TS output preserves
+  Teletext and DVB bitmap PIDs independently. Prior Linux and Windows physical
+  gates cover completed/growing MPEG-2 and H.264, AC-3/AAC, language/service
+  selection, pause/resume, seek, program/channel replacement, EOF/fallback,
+  repeated teardown, and zero-orphan cleanup. The final stock `.175` HD200
+  compatibility run retained unmodified legacy MPEG-2/CEA, H.264/AC-3,
+  authored-DVD, STOP/Home, and live-transition behavior; stock Teletext/DVB
+  non-rendering was reproduced as an old stock-FFmpeg limitation rather than a
+  MIM regression. No synthetic caption stream is inserted into real media.
+  Evidence: workspace `artifacts/mimfix003-hd200/RESULTS.md`.
 
 
 ### Archived completed checklist items (2026-09-30)
