@@ -1,8 +1,17 @@
 # Handoff
 
-## PLUGIN-RELEASE-001 approved publication preparation (2026-10-09)
+## PLUGIN-RELEASE-001 published and catalog submitted (2026-10-09)
 
-User approved plugin binary/catalog updates. MIM0.4.11 wraps byte-identical
+Public beta: https://github.com/opensagetv-vibe/opensagetv-vibe-ffmpeg-mim/releases/tag/v0.4.11
+Tag a2ca1d00faa32319f03383fae4aab57248c5b0c5 has green CI and3 independently
+downloaded/digest-verified assets. Exact runtime MD5s verified against the
+paired FFmpeg0.1.5 catalog manifests. Upstream plugin catalog PR127 is OPEN/
+MERGEABLE: https://github.com/OpenSageTV/sagetv-plugin-repo/pull/127
+Availability in the ordinary plugin manager awaits merge/aggregate generation.
+No server install/restart. Completed task moves to ledger; remaining physical
+limitations below remain. Documentation-only follow-up leaves the tag fixed.
+
+Qualification detail: user approved plugin binary/catalog updates. MIM0.4.11 wraps byte-identical
 qualified0.4.10 FFmpeg/FFprobe engines: downloaded base SHA256 Linux91d5f759,
 Windowsd857b637; exact engine/probe comparisons pass. Both current wrappers
 cross-build in the reusable target toolchains. Linux CLI/mapping/lifecycle/

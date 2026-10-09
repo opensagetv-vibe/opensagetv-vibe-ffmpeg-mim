@@ -2,6 +2,10 @@
 
 ## 0.4.11 - 2026-10-09
 
+- Published3 assets with bullet-point beta notes; independent public downloads
+  match GitHub digests. Paired catalog update submitted as plugin-repo#127,
+  awaiting upstream merge/aggregate generation. No server installation implied.
+
 - Prepare the approved paired Linux/Windows MIM wrapper release with explicit
   ownedDirectStreams negotiation. The existing FFmpeg9/FFprobe engines match
   the independently downloaded0.4.10 packages exactly; no engine or driver

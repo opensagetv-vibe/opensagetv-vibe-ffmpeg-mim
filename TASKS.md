@@ -9,11 +9,6 @@ This is the only active FFmpeg/MIM backlog. Completed work moves to the
 checklist change ledger; release evidence is also recorded in `CHANGELOG.md`
 and `HANDOFF.md`.
 
-- [ ] **PLUGIN-RELEASE-001 - Publish paired MIM0.4.11 runtime.** Explicitly
-  approved2026-10-09. Both wrappers built against unchanged verified qualified
-  FFmpeg engines; Linux CLI/static/containment/package gates pass. Publish
-  immutable prerelease assets after exact-HEAD green CI and independently
-  verify public digests. No new Windows/GPU physical matrix or promotion.
 
 - [ ] Finish isolated-server commissioning of the locally passing stock-era
   thumbnail command compatibility. MIM now removes the historical private
@@ -57,6 +52,18 @@ and `HANDOFF.md`.
   session token, reconnect and live growth; a failed direct session must
   terminate cleanly and permit ordinary stock Fixed playback.
 ## Checklist change ledger
+
+- [x] **PLUGIN-RELEASE-001 - Publish paired MIM0.4.11 runtime.** Closed
+  2026-10-09 under explicit user approval. Both wrappers built against unchanged
+  independently verified0.4.10 FFmpeg/FFprobe engines. CLI/static/containment,
+  deterministic actual packages and release-source CI pass. Public prerelease
+  at a2ca1d00faa32319f03383fae4aab57248c5b0c5; all3 downloaded assets match
+  GitHub digests. Linuxb0113e24/Windows5f0643d3 match catalog runtime MD5s.
+  Paired FFmpeg0.1.5 catalog submission: OpenSageTV/sagetv-plugin-repo#127,
+  OPEN/MERGEABLE, not merged/live. No new Windows/GPU physical matrix or
+  promotion. Compact workspace artifacts/results/PLUGIN-RELEASE-001 evidence;
+  completed temporary staging retires recoverably. Post-release documentation
+  closure does not move the immutable tag or alter runtime payloads.
 
 - 2026-10-09 pre-commit publication review: explicit user approval, unchanged
   verified FFmpeg engines and both rebuilt MIM wrappers; affected CLI/static/
