@@ -1,12 +1,20 @@
 # Changelog
 
-## Unreleased
+## 0.4.11 - 2026-10-09
+
+- Prepare the approved paired Linux/Windows MIM wrapper release with explicit
+  ownedDirectStreams negotiation. The existing FFmpeg9/FFprobe engines match
+  the independently downloaded0.4.10 packages exactly; no engine or driver
+  rebuild is required for this wrapper-only feature. Linux CLI/lifecycle/crash
+  tests, static checks and deterministic packaging pass. Windows is cross-built;
+  no new Windows physical/GPU result is inferred.
 
 - Advertise explicit ownedDirectStreams support so the Standard plugin can
   refuse older wrappers that forward Direct/deinterlace markers into FFmpeg.
   Affected CLI/mapping/lifecycle/crash-containment suite passes; plugin-owned
   stock175 candidate has execution/ABI preflight and preserves INI/Core/stock
-  FFmpeg. Actual owned playback/recovery qualification remains pending.
+  FFmpeg. Actual Linux owned playback/recovery is qualified in the linked
+  Android DEVICE-002 scope; new Windows-wrapper physical proof is not claimed.
 
 - Close MIM-FIXED-003 caption/subtitle transport validation using the existing
   Linux/Windows Direct and caption gates plus the final stock `.175` HD200

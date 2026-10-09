@@ -1,5 +1,18 @@
 # Handoff
 
+## PLUGIN-RELEASE-001 approved publication preparation (2026-10-09)
+
+User approved plugin binary/catalog updates. MIM0.4.11 wraps byte-identical
+qualified0.4.10 FFmpeg/FFprobe engines: downloaded base SHA256 Linux91d5f759,
+Windowsd857b637; exact engine/probe comparisons pass. Both current wrappers
+cross-build in the reusable target toolchains. Linux CLI/mapping/lifecycle/
+containment and static/package contracts pass; new Windows physical execution
+is not claimed. Deterministic payloads: Linuxb0113e249bacd176722ff4bd4460c5e349f765469e485c5d16676b93026ddd90,
+Windows5f0643d343e44ffcb02a22f03dd5d1e516488d97742f68638b231a3f35e74207.
+The FFmpeg engine banner remains0.4.10 intentionally. Pair with FFmpeg Plugin
+0.1.5. Release/source CI/public hash validation precede the SageTV catalog PR;
+no test-server install/restart or broad matrix is part of preparation.
+
 ## MIM-DIRECT-CAP-001 (2026-10-08)
 
 Stock175's old plugin wrapper forwarded private Direct options into FFmpeg,

@@ -79,9 +79,9 @@ printf '\x47' > "$TMP/media/test.ts"
 printf '\x1a\x45\xdf\xa3' > "$TMP/media/test.mkv"
 
 v="$($TMP/ffmpeg --mim-version)"
-[[ "$v" == *"SageTV FFmpeg MIM 0.4.10"* ]]
+[[ "$v" == *"SageTV FFmpeg MIM 0.4.11"* ]]
 c="$($TMP/ffmpeg --mim-capabilities)"
-[[ "$c" == *'"mimVersion":"0.4.10"'* ]]
+[[ "$c" == *'"mimVersion":"0.4.11"'* ]]
 [[ "$c" == *'"dvdStreamTransform":true'* ]]
 python3 - "$c" <<'PY'
 import json
@@ -110,7 +110,7 @@ PY
 cp "$TMP/ffmpeg.real.ini" "$TMP/disabled.ini"
 sed -i 's/^enabled=true$/enabled=false/' "$TMP/disabled.ini"
 c="$(SAGETV_FFMPEG_MIM_INI="$TMP/disabled.ini" "$TMP/ffmpeg" --mim-capabilities)"
-[[ "$c" == *'"mimVersion":"0.4.10"'* ]]
+[[ "$c" == *'"mimVersion":"0.4.11"'* ]]
 mkdir -p "$TMP/missing-real"
 cp "$TMP/ffmpeg" "$TMP/missing-real/ffmpeg"
 cp "$TMP/ffmpeg.real.ini" "$TMP/missing-real/ffmpeg.real.ini"
@@ -170,7 +170,7 @@ d="$($TMP/ffmpeg --mim-dry-run -priority idle -dumpmetadata -v 2 -i "$TMP/media/
 [[ "$d" == *"-loglevel info"* ]]
 [[ "$d" == *"-i $TMP/media/test.ts"* ]]
 [[ -f "$TMP/ffmpeg.real.log" ]]
-grep -q 'mim-start version=0.4.10' "$TMP/ffmpeg.real.log"
+grep -q 'mim-start version=0.4.11' "$TMP/ffmpeg.real.log"
 
 # Modern FFmpeg emits colon-delimited stream indexes. Stock SageTV's
 # FormatParser accepts the historical dot-delimited form, so only metadata

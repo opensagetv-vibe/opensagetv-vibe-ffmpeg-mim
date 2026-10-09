@@ -60,7 +60,7 @@ grep -q 'MIM_NAME=SageTVTranscoder.exe' "$ROOT/code/docker/build_target_unified.
 # This repository validates only FFmpeg/MIM source, configuration, and output.
 
 # v0.4.10 keeps containment and restores stock FormatParser stream syntax.
-grep -q 'MIM_VERSION = "0.4.10"' "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp"
+grep -q 'MIM_VERSION = "0.4.11"' "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp"
 grep -q -- '--mim-capabilities' "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp"
 grep -q -- '-sagetvdiscstream' "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp"
 grep -q 'qsv:hw,child_device=' "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp"
@@ -111,4 +111,4 @@ grep -q "does not contain the SageTV -sagetvratectrl patch marker" "$ROOT/code/d
 grep -q '"\$cxx_command" "\${MIM_FLAGS\[@\]}"' "$ROOT/code/docker/build_target_unified.sh"
 ! grep -q '"\${cxx_args\[@\]}" "\${MIM_FLAGS\[@\]}"' "$ROOT/code/docker/build_target_unified.sh"
 
-echo '[PASS] v0.4.10 FFmpeg/MIM static validation'
+echo '[PASS] v0.4.11 FFmpeg/MIM static validation'

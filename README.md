@@ -4,10 +4,17 @@ Modern FFmpeg and SageTV Media Interface Module add-on for Linux/amd64 and
 Windows/amd64. The add-on will be included in the runtime but remain disabled
 until live MiniClient playback passes commissioning tests.
 
-The current add-on version is 0.4.10. It builds both targets in the unified
+The current add-on version is 0.4.11. It builds both targets in the unified
 Ubuntu 26/OpenJDK 11 development container. The FFmpeg source baseline is
 `n9.0.1`; SageTV's runtime `videorateadapt` control is applied as a narrowly
 scoped patch.
+
+The0.4.11 prerelease rebuilds only MIM for Linux/Windows. Its FFmpeg/FFprobe
+engines are byte-identical to the qualified0.4.10 packages; the engine banner
+therefore retains its0.4.10 build label. No new GPU/Windows physical matrix is
+implied. Installing the paired FFmpeg Plugin0.1.5 provides the negotiated
+owned-stream recovery used by Android0.5.101; older/missing support keeps
+ordinary Fixed playback.
 
 MIM also preserves SageTV's legacy FFmpeg command contracts. In particular,
 current FFmpeg metadata output is adapted to the stream-index syntax expected

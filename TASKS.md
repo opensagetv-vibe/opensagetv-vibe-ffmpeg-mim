@@ -9,6 +9,12 @@ This is the only active FFmpeg/MIM backlog. Completed work moves to the
 checklist change ledger; release evidence is also recorded in `CHANGELOG.md`
 and `HANDOFF.md`.
 
+- [ ] **PLUGIN-RELEASE-001 - Publish paired MIM0.4.11 runtime.** Explicitly
+  approved2026-10-09. Both wrappers built against unchanged verified qualified
+  FFmpeg engines; Linux CLI/static/containment/package gates pass. Publish
+  immutable prerelease assets after exact-HEAD green CI and independently
+  verify public digests. No new Windows/GPU physical matrix or promotion.
+
 - [ ] Finish isolated-server commissioning of the locally passing stock-era
   thumbnail command compatibility. MIM now removes the historical private
   frame-selection options, maps numeric `-vsync`, replaces the removed
@@ -51,6 +57,12 @@ and `HANDOFF.md`.
   session token, reconnect and live growth; a failed direct session must
   terminate cleanly and permit ordinary stock Fixed playback.
 ## Checklist change ledger
+
+- 2026-10-09 pre-commit publication review: explicit user approval, unchanged
+  verified FFmpeg engines and both rebuilt MIM wrappers; affected CLI/static/
+  containment/deterministic package gates pass. Publication remains unchecked
+  until public download verification. No completed checkoffs in active work;
+  workspace PLUGIN-RELEASE-001 priority reviewed, Android order306 unchanged.
 
 - 2026-10-08 pre-commit source-sync review: explicit owned-Direct capability
   source/Linux commissioning is retained; static and argument/lifecycle/crash-

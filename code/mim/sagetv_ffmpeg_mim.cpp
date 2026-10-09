@@ -42,7 +42,7 @@ static_assert(sizeof(void*) == 8, "SageTV FFmpeg MIM supports Windows x64 only."
 
 namespace fs = std::filesystem;
 
-static constexpr const char* MIM_VERSION = "0.4.10";
+static constexpr const char* MIM_VERSION = "0.4.11";
 
 static std::string trim(std::string s) {
     auto is_ws = [](unsigned char c){ return std::isspace(c) != 0; };
