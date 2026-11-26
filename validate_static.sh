@@ -60,7 +60,9 @@ grep -q 'MIM_NAME=SageTVTranscoder.exe' "$ROOT/code/docker/build_target_unified.
 # This repository validates only FFmpeg/MIM source, configuration, and output.
 
 # v0.4.10 keeps containment and restores stock FormatParser stream syntax.
-grep -q 'MIM_VERSION = "0.4.11"' "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp"
+mim_version="$(sed -n 's/^VERSION=//p' "$ROOT/release.properties" | tr -d '\r')"
+[[ "$mim_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+grep -Fq "MIM_VERSION = \"$mim_version\";" "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp"
 grep -q -- '--mim-capabilities' "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp"
 grep -q -- '-sagetvdiscstream' "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp"
 grep -q 'qsv:hw,child_device=' "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp"
@@ -92,7 +94,11 @@ grep -q 'containing EPIPE' "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp"
 grep -q 'contained ffmpeg failure' "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp"
 grep -q 'PR_SET_PDEATHSIG,SIGKILL' "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp"
 grep -q 'handle_parent_stdin_closed("stdin EOF")' "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp"
-grep -q 'handle_parent_stdin_closed("stdin HUP")' "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp"
+# HUP must be drained through read()==0, not prematurely treated as EOF;
+# the old literal-HUP call was removed by the qualified raw-pipe fix.
+grep -Fq 'if(re&(POLLIN|POLLHUP))' "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp"
+grep -Fq 'ssize_t n=read(STDIN_FILENO,tmp,sizeof(tmp))' "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp"
+grep -Fq 'raw_pending.empty()' "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp"
 grep -q 'control: parent signal=' "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp"
 
 grep -q 'has_flag(a,"-dumpmetadata")' "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp"
@@ -111,4 +117,4 @@ grep -q "does not contain the SageTV -sagetvratectrl patch marker" "$ROOT/code/d
 grep -q '"\$cxx_command" "\${MIM_FLAGS\[@\]}"' "$ROOT/code/docker/build_target_unified.sh"
 ! grep -q '"\${cxx_args\[@\]}" "\${MIM_FLAGS\[@\]}"' "$ROOT/code/docker/build_target_unified.sh"
 
-echo '[PASS] v0.4.11 FFmpeg/MIM static validation'
+echo "[PASS] v$mim_version FFmpeg/MIM static validation"

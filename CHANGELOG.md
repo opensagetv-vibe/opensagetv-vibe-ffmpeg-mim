@@ -1,5 +1,176 @@
 # Changelog
 
+## 0.4.20 release preparation - 2026-11-26
+
+- User-authorized beta publication includes the qualified stock-compatible
+  runtime work below. Preserve stock FFmpeg/Core, source cadence, authoritative
+  INI and optional per-session hardware/output/adaptation negotiation.
+- Current mapping/probe/backend/caption/QSV/EOF/duplex/static checks pass;
+  physical evidence remains scoped to recorded Linux/Windows/device rows.
+
+## SETTINGS-005 hardware backend selection (unreleased)
+
+- Consume a scoped owned-Direct hardware backend pin, advertise optional
+  revision1 and refuse unavailable pins without changing encoder or shared INI.
+  Preserve Auto/ordinary callers and qualified FFmpeg/probe engines. Closed
+  values/platform/copy/software guards prevent private option leakage.
+- Both wrappers and native18pin/full mapping/caption/QSV/EOF/duplex tests pass.
+  Normal plugin manager232 deployment,12real QSV/VAAPI output/seek/quality rows
+  and Non-Pro4Direct/HLS routes/8seeks/2FF/2AMF refusals/HDMI pass;210prefs/CC/
+  power restored, final activity/provider0, stock20/INI/engines unchanged.
+  No Pro/175/Windows/vendor-wide execution/publication claim; compact results
+  retain exact scope after raw retirement.
+
+## FIXED-002 VAAPI recording-seek captions (unreleased)
+
+- Repack A/53 caption tuples with FFmpeg's existing metadata-only ccrepack
+  filter before caption-preserving H.264 VAAPI encoding. Preserve hardware
+  decode/filter/encode, pixels, actual cadence, captions, other backends, Copy,
+  shared INI and the qualified FFmpeg/FFprobe engines.
+- Exact broadcast153.090s seek reproduces packed-header ENOSPC before the
+  correction. Isolated90-frame Off/Auto output at153.090s and419.527s decodes
+  cleanly with captions. Native mapping/teardown/EOF/duplex/policy/package
+  guards pass. Normal-manager232 deployment and Non-Pro11routes/33real-source
+  seeks plus FF pass; independent HLS captions/motion/audio and IJK motion/audio
+  HDMI verify output.210prefs/CC/power restored, final activity/provider0.
+  No Pro/Windows physical, instant-seek or native Web VAAPI claim/publication.
+
+## MIM-PROBE-001 TS encode discovery (unreleased)
+
+- Enforce a bounded5s analysis floor on known TS encode inputs, after either
+  normal or cached option mapping. A cached probe record is not metadata
+  injection into FFmpeg. Preserve Copy/stdin/non-TS, larger/auto budgets and
+  actual cadence; never force FPS or edit the authoritative INI.
+- Reproduced delayed MPEG-2 sequence headers causing90kFPS / VAAPI error24.
+  Rebuilt wrappers and normal-manager232 old/current actual VAAPI/QSV/software
+  output tests pass with unchanged engines, stock20 and shared INI. Android
+  115/92df378a completes18Non-Pro routes plus affected Source6 policy/failure/
+  compatibility/UI/HLS gates, with210prefs and zero owned sessions restored.
+  No Windows runtime/vendor-wide/publication claim.
+
+## MIM-OUTPUT-001 per-session encoder policy (unreleased)
+
+- Add scoped consumed Direct encoder policy: server default, prefer hardware,
+  software only and hardware only. Override only in process memory; refuse
+  unavailable explicit policy without software/copy fallback or INI edits.
+- Rebuild both wrappers against unchanged engines. CPU-only executable guards,
+  real CPU output and installed232 QSV/software isolation/seek proof pass;
+  actual Windows/every-vendor policy support is not certified. Affected Non-Pro
+  software/QSV/HEVC/status gates and native mapping/raw/owned-stop regression
+  pass; real HEVC segments decode independently on the unchanged wrapper.
+  Initial HEVC repeat/provider502 remain unproven, no speculative GOP fix.
+
+## Unreleased0.4.20 - Windows caption-claim forced-stop lease
+
+- Keep the atomically owned Windows caption job marker on a non-inheritable
+  delete-on-close OS handle. A stock Java8 forced stop must not leave a dead
+  MIM job occupying a UDP slot and reject the next Direct seek with409.
+- Actual185 Java8/native before/after probe: live marker remains visible and
+  readable; forced-stop removal fails before and passes afterward, unrelated
+  file preserved. Client-only cleanup cannot safely release a different,
+  stock-Core-owned encoder's marker; this bounded fix belongs to MIM.
+- Linux claim behavior, Core, drivers, user INI and four qualified FFmpeg /
+  FFprobe engines are unchanged. Wrapper builds and affected mapping/pipe/
+  teardown tests pass. Paired development FFmpeg Plugin0.1.35; publication held.
+- MIM-WIN-001 qualified scope now includes real Non-Pro completed/growing
+  HLS/Copy/Direct/classic controls and native DVD, actual Chromium/WebKit
+  recording/DVD/growing and isolated public-HLS EOF. Original37stock files/
+  INI/settings intact, borrowed tuner/awake released and zero final custody.
+  Windows in-place rate/full hardware decode, intermittent raw-QSV failure
+  and independently diagnosed unchanged Portmaster remain explicit limits.
+
+## Unreleased0.4.19 - MIM-WIN-001 Windows pipe/device qualification
+
+- Supersedes internal0.4.18: independent32KiB Windows raw-input pump removes
+  the1024-byte/50ms main-loop throttle while preserving stderr/control/EOF.
+  Actual server Java8 proof:131KiB8.15s to34ms;1MiB plus17stderr bursts68ms.
+- Software-frame H.264 QSV gets an explicit Windows D3D11 device(default0).
+  The same real source fails automatic/adapter1 with FrameType0 and passes
+  adapter0. Preserve caller-supplied devices/hardware frames, other codecs and
+  platforms; no stock Core, driver, qualified engine or saved INI replacement.
+- Both wrapper builds and scoped device/EOF/duplex/control guards pass.
+  Installed consumer acceptance remains tracked in MIM-WIN-001; no release.
+
+## Unreleased0.4.17 - ordinary Fixed QSV caption queue
+
+- MIM-QSV-001 independently reproduces SIGSEGV in Intel oneVPL26.1.2's
+  asynchronous H.264 worker, without any client. Keep one caption-bearing
+  system-memory frame in flight for mapped Linux H.264 QSV encoding.
+- Preserve A/53 captions, GPU encoding, requested bitrate/VBV, filters and
+  cadence. Native passthrough, hardware-frame input, HEVC, other vendors and
+  the already-qualified adaptive profile are unchanged. No driver upgrade,
+  FFmpeg-engine rebuild, Core modification or INI migration.
+- Both wrappers rebuild against four unchanged engines; new9-case mapping
+  regression, existing control/EOF6/duplex/signal/media/package gates pass.
+  Device qualification is tracked in MIM-QSV-001, not inferred from argv tests.
+
+## Unreleased0.4.16 — opt-in Linux-QSV runtime integration
+
+- Add a negotiated runtime-control revision and consume the private opt-in;
+  reuse existing videorateadapt for mapped Direct and native Web file argv.
+  Select the qualified CBR/zero-lookahead profile only in the eligible scope.
+  Copy/pipe/other encoders/Windows/site-off preserve ordinary behavior.
+- Runtime-only control does not consume caption listener slots. Both wrappers
+  build with four unchanged qualified FFmpeg/FFprobe engines; mapping, exact
+  raw EOF and blocked-duplex/signal regressions pass.
+- Actual settings test and WebKit output-rate/GPU-process evidence pass;
+  consumer qualification is separately recorded, not universal vendor approval.
+
+## External rate-control proof2026-11-24UTC (test tooling only)
+
+- Add standalone installed-engine QSV baseline/adaptive experiment and eight
+  measurement guards. Actual same-process6->2->6Mbps output, clean HLS decode
+  and timestamps pass on stock232 with unchanged protected/runtime/INI bytes.
+  No production capability, runtime patch, client integration or release.
+
+## Unreleased0.4.15 — responsive owned HLS
+
+- Advertise responsiveHlsRevision1 and consume the negotiated Direct-only
+  encoder flag. Actual H.264 QSV segment/M3U8 output uses forced IDRs; Copy,
+  software, other GPUs, continuous TS and legacy Direct/Fixed stay unchanged.
+- Build Linux/Windows wrappers without changing the four qualified engines.
+  Add scoped mapping negatives and actual software HLS startup/pacing proof.
+  No installed runtime, INI, public release or physical certification change.
+- Correct stale static validation: derive version from release metadata and
+  check the qualified HUP-drain/real-EOF path instead of requiring the old
+  premature-close call. Existing exact EOF/duplex behavior tests remain intact.
+
+## Task reconciliation2026-11-20 (documentation only)
+
+- Record completed Linux raw-EOF acceptance and retire duplicate pending
+  MIM-FIXED-001/002 specs to the completion ledger, referencing their owning
+  plugin and checked transport matrix. Independent vendor/release/Windows
+  conditions remain explicit. No binaries, engine hashes or release changed.
+
+## Unreleased0.4.14 — bounded Linux raw-media duplex forwarding
+
+- Prevent raw stdin writes from blocking FFmpeg stderr drainage and parent
+  signal handling. Queue at most64KiB; poll child writability and preserve all
+  pending bytes before EOF. Control mode and Windows forwarding are unchanged.
+- Deterministic1MiB/17diagnostic-burst regression fails before and passes after;
+  raw backpressure SIGTERM and exact EOF6/control/isolation pass. FFmpeg/probe
+  engines and authoritative INI remain unchanged. Field qualification pending.
+
+## Unreleased0.4.13 — raw-stdin EOF preservation
+
+- Drain buffered raw media even when poll reports HUP; close child stdin only
+  after read returns actual EOF. Before correction1025bytes became1024 and a
+  real18432byte still DVD lost video after its NAV packet. Six synthetic
+  count/hash cases pass after correction. MIM-STDIN-001/Web WP08-006; existing
+  control Stop/process isolation remains required. Candidate not yet installed
+  or published; FFmpeg/probe engines and authoritative INI are unchanged.
+
+## Unreleased 0.4.12
+
+- Fix subtitle-only output for an unmapped stock Fixed command. Preserve
+  FFmpeg automatic A/V selection; extend all subtitle maps only when the
+  caller already supplied explicit stream maps. Keep original codec/language
+  selection and engine binaries unchanged. Parent STOCK-005/MIM-MAP-001.
+- Qualify the local candidate through the actual stock232 plugin manager:
+  unmapped Fixed/DVB, unavailable-endpoint fallback and owned Direct/DVB
+  seek/pause pass on Non-Pro25, with HDMI picture/caption confirmation.
+  Stock Core/FFmpeg/INI remain unchanged; no public release is implied.
+
 ## 0.4.11 - 2026-10-09
 
 - Published3 assets with bullet-point beta notes; independent public downloads

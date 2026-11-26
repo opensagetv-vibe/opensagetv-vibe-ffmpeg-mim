@@ -42,7 +42,7 @@ static_assert(sizeof(void*) == 8, "SageTV FFmpeg MIM supports Windows x64 only."
 
 namespace fs = std::filesystem;
 
-static constexpr const char* MIM_VERSION = "0.4.11";
+static constexpr const char* MIM_VERSION = "0.4.20";
 
 static std::string trim(std::string s) {
     auto is_ws = [](unsigned char c){ return std::isspace(c) != 0; };
@@ -145,6 +145,8 @@ public:
         return si!=data_.end() && si->second.find(lower(key))!=si->second.end();
     }
     bool get_bool(const std::string& s, const std::string& k, bool d=false) const { return parse_bool(get(s,k,d?"true":"false"), d); }
+    // Request-local overrides only. Never writes the authoritative INI.
+    void set(const std::string& section,const std::string& key,const std::string& value) { data_[lower(section)][lower(key)]=value; }
     long long get_ll(const std::string& s, const std::string& k, long long d=0) const { return parse_ll(get(s,k,std::to_string(d)), d); }
 private:
     std::map<std::string,std::map<std::string,std::string>> data_;
@@ -323,6 +325,12 @@ static bool is_encode_backend(const std::string& backend) {
 struct CaptionSideChannelSlot {
     int port=0;
     fs::path claim_path;
+#ifdef _WIN32
+    // A stock Java8 player can terminate MIM without running C++ cleanup.
+    // Keep this non-inheritable OS lease for the lifetime of the claim; the
+    // kernel removes only our atomically claimed file even on forced stop.
+    std::shared_ptr<void> claim_lease;
+#endif
     bool claimed() const { return port>0 && !claim_path.empty(); }
 };
 
@@ -372,6 +380,20 @@ static CaptionSideChannelSlot claim_caption_side_channel(const Ini& ini,
         ec.clear();
         fs::rename(available,claimed,ec);
         if(ec) continue;
+#ifdef _WIN32
+        HANDLE lease=CreateFileW(claimed.c_str(),GENERIC_READ|DELETE,
+            FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,nullptr,
+            OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL|FILE_FLAG_DELETE_ON_CLOSE,nullptr);
+        if(lease==INVALID_HANDLE_VALUE) {
+            const DWORD error=GetLastError();
+            // We own only the file just atomically renamed above. Return it
+            // to the advertiser if the OS cannot guarantee forced-stop cleanup.
+            fs::rename(claimed,available,ec);
+            log.log("WARNING caption-side-channel OS lease failed error=",error);
+            continue;
+        }
+        result.claim_lease=std::shared_ptr<void>(lease,[](void* handle){CloseHandle(handle);});
+#endif
         result.port=static_cast<int>(port_value);
         result.claim_path=claimed;
         log.log("caption-side-channel: claimed loopback port=",result.port,
@@ -933,7 +955,11 @@ static void quarantine_runtime_backend(const Ini& ini, const fs::path& real,
 static std::string choose_backend(const Ini& ini, const PlatformInfo& p, const fs::path& real,
                                   const fs::path& cache, Logger& log, const std::string& family,
                                   bool hardware_allowed=true) {
-    auto configured=lower(ini.get("hardware","backend","auto"));
+    const auto policy=ini.get("session","encoder_policy","server");
+    const auto pinned=ini.get("session","hardware_backend","auto");
+    auto configured=policy=="software"?std::string("software"):
+        policy=="hardware_only"||policy=="prefer_hardware"?std::string("auto"):
+        lower(ini.get("hardware","backend","auto"));
     auto caps=load_capabilities(real,cache,log);
     auto has=[&](const std::string& e){return !e.empty() && caps.find(e)!=std::string::npos;};
     auto enc=[&](const std::string& b){
@@ -961,6 +987,8 @@ static std::string choose_backend(const Ini& ini, const PlatformInfo& p, const f
     };
 
     auto backend_usable=[&](const std::string& b){
+        if(policy=="hardware_only"&&b=="software")return false;
+        if(policy=="software"&&b!="software")return false;
         if(!hardware_allowed && b!="software") return false;
         if(!has(enc(b))) return false;
         if(runtime_backend_quarantined(ini,real,cache,log,b,enc(b))) return false;
@@ -975,6 +1003,22 @@ static std::string choose_backend(const Ini& ini, const PlatformInfo& p, const f
         return b=="software" || preflight(b);
     };
 
+    if(pinned!="auto") {
+        // An owned request is stricter than the site's preference: never
+        // silently select a different accelerator or software for this session.
+        // The shipped targets are Linux/Windows, not macOS.
+        if(pinned=="videotoolbox")return "unavailable";
+#ifndef _WIN32
+        if(pinned=="amf"||pinned=="d3d12va")return "unavailable";
+#else
+        if(pinned=="vaapi")return "unavailable";
+#endif
+        if(policy!="software" && hardware_allowed && has(enc(pinned)) &&
+           !runtime_backend_quarantined(ini,real,cache,log,pinned,enc(pinned)) &&
+           preflight(pinned))return pinned;
+        log.log("WARNING requested hardware backend unavailable: ",pinned);
+        return "unavailable";
+    }
     if(configured!="auto") {
         // An explicitly configured backend is authoritative. Require the encoder to be
         // compiled in and, on Linux, pass the bounded runtime preflight. The
@@ -986,8 +1030,12 @@ static std::string choose_backend(const Ini& ini, const PlatformInfo& p, const f
         log.log("WARNING configured backend=",configured," does not expose ",enc(configured),"; falling back");
     }
 
-    auto prefs=split_csv(ini.get("hardware",p.name=="linux-x64"?"linux_preference":"windows_preference",
-                                 p.name=="linux-x64"?"qsv,nvenc,vaapi,software":"qsv,nvenc,amf,d3d12va,software"));
+    auto preference=ini.get("hardware",p.name=="linux-x64"?"linux_preference":"windows_preference",
+                                 p.name=="linux-x64"?"qsv,nvenc,vaapi,software":"qsv,nvenc,amf,d3d12va,software");
+    // Prefer/Only must not inherit a software-first server preference.
+    if(policy=="hardware_only"||policy=="prefer_hardware")
+        preference=p.name=="linux-x64"?"qsv,nvenc,vaapi,software":"qsv,nvenc,amf,d3d12va,software";
+    auto prefs=split_csv(preference);
     for(auto b:prefs){ b=lower(b); if(backend_usable(b)) return b; }
 
     // If no hardware encoder exists, preserve SageTV's request through a software encoder
@@ -1076,7 +1124,7 @@ static void print_mim_capabilities(const fs::path& executable_dir, const Ini& in
               << "\",\"platform\":\"" << json_escape(platform.name)
               << "\",\"ffmpegVersion\":\"" << json_escape(ffmpeg_version)
               << "\",\"selectedBackend\":\"" << json_escape(selected)
-              << "\",\"dvdStreamTransform\":true,\"dvdVideoDemux\":true,\"ownedDirectStreams\":true,\"backends\":{";
+              << "\",\"dvdStreamTransform\":true,\"dvdVideoDemux\":true,\"ownedDirectStreams\":true,\"responsiveHlsRevision\":1,\"runtimeBitrateControlRevision\":1,\"encoderPolicyRevision\":1,\"hardwareBackendRevision\":1,\"backends\":{";
     for(size_t index=0;index<states.size();++index) {
         const auto& state=states[index];
         if(index) std::cout << ',';
@@ -1564,6 +1612,8 @@ static std::vector<std::string> rewrite_args(const Ini& ini, const PlatformInfo&
                                               bool& stdinctrl, bool& active, std::optional<fs::path>& input,
                                               std::string& backend) {
     std::vector<std::string> a=original;
+    const bool runtime_rate_requested=has_flag(a,"-sagetvruntimebitrate");
+    remove_flag(a,"-sagetvruntimebitrate");
 
     // SageTV's bundled FFmpeg accepted a private `-priority <class>` option.
     // Upstream FFmpeg does not, and rejects every affected metadata,
@@ -1655,12 +1705,21 @@ static std::vector<std::string> rewrite_args(const Ini& ini, const PlatformInfo&
     }
 
     if (is_management_call(a)) {
+        remove_flag(a,"-sagetvresponsivehls");
         stdinctrl=false; active=false; input.reset(); backend="passthrough";
         return a;
     }
     const bool sagetv_job=looks_like_sagetv_job(original);
     const bool disc_stream=has_flag(a,"-sagetvdiscstream");
     const bool direct_stream=has_flag(a,"-sagetvdirect");
+    // Only the negotiated owned segment/M3U8 profile may alter HLS encoder
+    // boundaries. Always consume the private flag, including rejected scopes.
+    const auto hls_format=get_output_opt_value(a,{"-f"});
+    const auto hls_list=get_opt_value(a,{"-segment_list_type"});
+    const bool responsive_hls=direct_stream && has_flag(a,"-sagetvresponsivehls")
+        && hls_format && ieq(*hls_format,"segment")
+        && hls_list && ieq(*hls_list,"m3u8");
+    remove_flag(a,"-sagetvresponsivehls");
     // Consume this private Direct-session option in the same pass that reads
     // it. Keeping the read and erase atomic avoids ever forwarding a plugin
     // control option to upstream FFmpeg, including on the Windows CRT argv
@@ -1715,6 +1774,27 @@ static std::vector<std::string> rewrite_args(const Ini& ini, const PlatformInfo&
     // happens only when SageTV explicitly requests a configured trigger codec.
     // Unrelated/normal ffmpeg invocations remain transparent passthrough.
     if(!triggered) {
+        // Web already builds its native QSV pipeline. Preserve its decoder,
+        // filters, cadence and container, but honor explicitly negotiated rate
+        // control even though no legacy-codec mapping is needed.
+        const auto native_codec=requested_video_codec(a);
+        const auto native_rate=get_output_opt_value(a,{"-b:v","-b"});
+        const auto native_bps=native_rate?parse_bitrate_bps(*native_rate):std::optional<long long>{};
+        if(runtime_rate_requested && p.name=="linux-x64" && native_codec && *native_codec=="h264_qsv"
+           && input && input->string()!="-" && input->string().rfind("pipe:",0)!=0
+           && native_bps && *native_bps>=250000 && *native_bps<=50000000
+           && ini.get_bool("stdinctrl","runtime_bitrate_control",false)) {
+            backend="qsv";stdinctrl=true;
+            if(!has_flag(a,"-sagetvratectrl"))a.insert(a.begin(),"-sagetvratectrl");
+            remove_flag(a,"-nostdin");
+            remove_opt_value(a,{"-v","-loglevel"});a.insert(a.begin(),{"-loglevel","verbose"});
+            set_output_opt(a,{"-maxrate","-maxrate:v"},"-maxrate",*native_rate);
+            set_output_opt(a,{"-bufsize","-bufsize:v"},"-bufsize",*native_rate);
+            set_output_opt(a,{"-bf"},"-bf","0");
+            set_output_opt(a,{"-look_ahead"},"-look_ahead","0");
+            set_output_opt(a,{"-async_depth"},"-async_depth","1");
+            return a;
+        }
         auto action=lower(ini.get("general","default_sagetv_action","copy"));
         if(sagetv_job && action=="copy") {
             backend="copy";
@@ -1806,6 +1886,21 @@ static std::vector<std::string> rewrite_args(const Ini& ini, const PlatformInfo&
         if(lower(ini.get("input","analyzeduration_mode","override"))=="override") set_input_opt(a,{"-analyzeduration"},"-analyzeduration",ini.get("input","analyzeduration","500000"));
     }
 
+    // MIM-PROBE-001: a TS recording may begin before its first MPEG sequence
+    // header. The former 0.5s analysis window could identify the video PID but
+    // not its format/cadence, leaving FFmpeg to use the 90kHz transport clock
+    // as FPS (VAAPI then submitted 65535/1 to rate control and failed with
+    // VA_STATUS_ERROR_ENCODING_ERROR). A probe-cache hit is not stream metadata
+    // injection. Keep a bounded discovery floor on both cold/cached file TS
+    // encodes, preserving larger budgets. Copy returned above; unknown stdin
+    // and non-TS inputs retain their existing policies. Never guess output FPS.
+    if(input && likely_mpegts(*input)) {
+        auto analysis=get_opt_value(a,{"-analyzeduration"});
+        if(analysis && parse_ll(*analysis,0)>0 && parse_ll(*analysis,0)<5000000) {
+            set_input_opt(a,{"-analyzeduration"},"-analyzeduration","5000000");
+            log.log("compat: MPEG-TS encode discovery floor analyze_us=5000000; no FPS override");
+        }
+    }
     if(lower(ini.get("input","fflags_mode","append"))=="append") merge_plus_flags(a,ini.get("input","fflags","+genpts+discardcorrupt"));
     if(lower(ini.get("input","thread_queue_size_mode","override"))=="override") set_input_opt(a,{"-thread_queue_size"},"-thread_queue_size",ini.get("input","thread_queue_size","8192"));
     if(lower(ini.get("input","max_delay_mode","override"))=="override") set_input_opt(a,{"-max_delay"},"-max_delay",ini.get("input","max_delay","500000"));
@@ -1825,6 +1920,9 @@ static std::vector<std::string> rewrite_args(const Ini& ini, const PlatformInfo&
     backend=choose_backend(ini,p,real,exe_dir/"cache/capabilities",log,family,
                            !active || active_hardware_encode);
     if(backend=="unavailable") {
+        if(ini.get("session","encoder_policy","server")!="server" ||
+           ini.get("session","hardware_backend","auto")!="auto")
+            throw std::runtime_error("requested_encoder_unavailable");
         auto fallback=lower(ini.get("transcode_map","on_encoder_unavailable","passthrough"));
         log.log("WARNING no encoder available for requested transcode family=",family," fallback=",fallback);
         if(fallback=="copy") {
@@ -2040,6 +2138,46 @@ static std::vector<std::string> rewrite_args(const Ini& ini, const PlatformInfo&
 
     auto codec=codec_for_backend(ini,backend,family);
     set_output_opt(a,{"-vcodec","-c:v","-codec:v"},"-c:v",codec);
+    // FIXED-002: MPEG-TS seek preroll can accumulate A/53 tuples on the
+    // first decoded frame. H.264 VAAPI's packed extra-header buffer is only
+    // 8192 bits, so that burst fails ENOSPC before the replacement publishes
+    // any media. Repack valid caption tuples at the actual output cadence;
+    // do not disable captions, invent FPS, download GPU pixels or switch
+    // encoders. ccrepack operates on frame side data, including VAAPI frames.
+    if(codec=="h264_vaapi" && preserve_a53cc) {
+        auto vf=get_output_opt_value(a,{"-vf","-filter:v"}).value_or("");
+        if(vf.find("ccrepack")==std::string::npos) {
+            if(!trim(vf).empty()) vf+=",";
+            vf+="ccrepack";
+            set_output_opt(a,{"-vf","-filter:v"},"-vf",vf);
+        }
+        log.log("compat: VAAPI H.264 caption tuples repacked before encode");
+    }
+    // One encoder, file input only: FFmpeg's stdin control cannot share raw
+    // media on pipe:0. Other backends/platforms retain ordinary playback.
+    if(runtime_rate_requested && p.name=="linux-x64" && backend=="qsv" && codec=="h264_qsv"
+       && input && input->string()!="-" && input->string().rfind("pipe:",0)!=0
+       && ini.get_bool("stdinctrl","runtime_bitrate_control",false)) {
+        stdinctrl=true;
+        if(!has_flag(a,"-sagetvratectrl"))a.insert(a.begin(),"-sagetvratectrl");
+        remove_opt_value(a,{"-v","-loglevel"});a.insert(a.begin(),{"-loglevel","verbose"});
+    }
+    // WEB-043 equivalent: QSV forced I-frames need not be IDR. Apply only to
+    // the actual mapped QSV encoder; software/fallback/other GPUs retain their
+    // own codec options. Ordinary Fixed, Direct legacy and Copy are unchanged.
+    if(responsive_hls && backend=="qsv" && codec=="h264_qsv")
+        set_output_opt(a,{"-forced_idr"},"-forced_idr","1");
+
+    // MIM-QSV-001: Intel oneVPL26.1.2's asynchronous H.264 worker can
+    // SIGSEGV with A/53 SEI on system-memory input (independently reproduced
+    // with the installed engine, no client). Synchronize each submitted frame
+    // before reusing its caption/control storage. Keep captions, GPU encoding,
+    // bitrate/VBV, cadence and filters; do not silently select software encode
+    // or change native passthrough, other codecs/vendors or hardware frames.
+    if(p.name=="linux-x64" && codec=="h264_qsv" && preserve_a53cc && !hardware_decode) {
+        set_output_opt(a,{"-async_depth"},"-async_depth","1");
+        log.log("compat: QSV caption-safe system-memory encode async_depth=1");
+    }
 
 #ifdef _WIN32
     // Intel's legacy Haswell Media SDK driver can accept the QSV preflight but
@@ -2071,6 +2209,16 @@ static std::vector<std::string> rewrite_args(const Ini& ini, const PlatformInfo&
         double mm=1.5,bm=3.0; try{mm=std::stod(ini.get("video","maxrate_multiplier","1.5"));}catch(...){} try{bm=std::stod(ini.get("video","bufsize_multiplier","3.0"));}catch(...){}
         set_output_opt(a,{"-maxrate","-maxrate:v"},"-maxrate",format_bitrate((long long)(*bps*mm)));
         set_output_opt(a,{"-bufsize","-bufsize:v"},"-bufsize",format_bitrate((long long)(*bps*bm)));
+        if(runtime_rate_requested&&stdinctrl&&p.name=="linux-x64"&&codec=="h264_qsv"
+           &&ini.get_bool("stdinctrl","runtime_bitrate_control",false)) {
+            // Match the externally qualified CBR/no-B-frame profile. Keep VBV
+            // fixed across changes; no resolution/frame-rate or decoder reset.
+            set_output_opt(a,{"-maxrate","-maxrate:v"},"-maxrate",*br);
+            set_output_opt(a,{"-bufsize","-bufsize:v"},"-bufsize",*br);
+            set_output_opt(a,{"-bf"},"-bf","0");
+            set_output_opt(a,{"-look_ahead"},"-look_ahead","0");
+            set_output_opt(a,{"-async_depth"},"-async_depth","1");
+        }
     }
 
     // MiniPlayer fixed-push profiles are a wire contract, not merely a codec hint.
@@ -2133,7 +2281,15 @@ static std::vector<std::string> rewrite_args(const Ini& ini, const PlatformInfo&
         if(preserve_broadcast_subtitles && sagetv_job && input &&
            likely_mpegts(*input)) {
             remove_flag(a,"-sn");
-            add_output_tokens(a,{"-map","0:s?"});
+            // Adding the FIRST -map disables FFmpeg's automatic A/V stream
+            // selection. Stock Core can omit all maps when its old metadata
+            // parser cannot describe this source: a subtitle-only map then
+            // produces a tiny TS with no playable video/audio. Retain automatic
+            // A/V (and the first compatible subtitle via -c:s copy) in that
+            // case. Only extend an existing explicit selection, never guess
+            // first-video/first-audio and change stock's selection semantics.
+            if(get_output_opt_value(a,{"-map"}))
+                add_output_tokens(a,{"-map","0:s?"});
             set_output_opt(a,{"-scodec","-c:s","-codec:s"},"-c:s","copy");
             log.log("compat: preserved MPEG-TS DVB/Teletext subtitle streams");
         }
@@ -2213,6 +2369,16 @@ static int run_child_posix(const fs::path& exe, const std::vector<std::string>& 
 
     int pin[2];
     if(pipe(pin)!=0){ log.log("ERROR stdin pipe failed errno=",errno); sigaction(SIGPIPE,&old_sigpipe,nullptr); return 127; }
+    // Raw media and child diagnostics share this poll loop. A blocking write
+    // here can prevent draining stderr while FFmpeg waits for stderr space.
+    // Control mode keeps its existing command-forwarding semantics.
+    if(!cc.enabled) {
+        int flags=fcntl(pin[1],F_GETFL,0);
+        if(flags<0 || fcntl(pin[1],F_SETFL,flags|O_NONBLOCK)<0) {
+            log.log("ERROR raw stdin nonblocking setup failed errno=",errno);
+            close(pin[0]);close(pin[1]);sigaction(SIGPIPE,&old_sigpipe,nullptr);return 127;
+        }
+    }
 
     int perr[2]={-1,-1};
     bool capture_stderr=log_stderr || legacy_metadata_output;
@@ -2302,7 +2468,8 @@ static int run_child_posix(const fs::path& exe, const std::vector<std::string>& 
     }
     fcntl(STDIN_FILENO,F_SETFL,fcntl(STDIN_FILENO,F_GETFL,0)|O_NONBLOCK);
 
-    std::string buf, errbuf, metadata_pending;
+    std::string buf, errbuf, metadata_pending, raw_pending;
+    constexpr size_t raw_pending_limit=64*1024;
     bool stdin_open=true, child_stdin_open=true, kill_escalated=false, parent_signal_logged=false;
     int status=0;
     std::optional<std::chrono::steady_clock::time_point> terminate_requested;
@@ -2345,7 +2512,8 @@ static int run_child_posix(const fs::path& exe, const std::vector<std::string>& 
             log.log("control: ",reason," -> terminate ffmpeg process-group");
             request_terminate(reason);
         }
-        if(child_stdin_open && pin[1]>=0) {
+        // Raw EOF must follow every queued byte, not just the parent's EOF.
+        if(child_stdin_open && pin[1]>=0 && (cc.enabled || raw_pending.empty())) {
             close(pin[1]); pin[1]=-1; child_stdin_open=false;
         }
     };
@@ -2400,29 +2568,23 @@ static int run_child_posix(const fs::path& exe, const std::vector<std::string>& 
     };
 
     for(;;){
-        struct pollfd pfds[2]; nfds_t nfds=0; int stdin_idx=-1, err_idx=-1;
-        if(stdin_open) { stdin_idx=(int)nfds; pfds[nfds++]={STDIN_FILENO,POLLIN|POLLHUP,0}; }
+        struct pollfd pfds[3]; nfds_t nfds=0; int stdin_idx=-1, err_idx=-1;
+        if(stdin_open && (cc.enabled || raw_pending.size()<raw_pending_limit)) { stdin_idx=(int)nfds; pfds[nfds++]={STDIN_FILENO,POLLIN|POLLHUP,0}; }
         if(capture_stderr) { err_idx=(int)nfds; pfds[nfds++]={perr[0],POLLIN|POLLHUP,0}; }
+        if(!cc.enabled && child_stdin_open && !raw_pending.empty()) pfds[nfds++]={pin[1],POLLOUT|POLLHUP,0};
         int pr=poll(pfds,nfds,100);
         if(pr>0 && stdin_idx>=0) {
             auto re=pfds[stdin_idx].revents;
-            if(re&POLLIN) {
+            // A closed writer can leave POLLIN|POLLHUP while more than one
+            // chunk is still buffered. HUP is not EOF: drain until read()==0
+            // before closing the child's pipe, or tiny DVD cells lose their
+            // trailing video/PES data. A HUP-only read cannot block on a live
+            // writer; existing control EOF teardown remains on the real EOF.
+            if(re&(POLLIN|POLLHUP)) {
                 char tmp[1024]; ssize_t n=read(STDIN_FILENO,tmp,sizeof(tmp));
                 if(n>0){
                     if(!cc.enabled) {
-                        ssize_t off=0;
-                        while(off<n && child_stdin_open) {
-                            ssize_t written=write(pin[1],tmp+off,(size_t)(n-off));
-                            if(written>0) off+=written;
-                            else if(written<0 && errno==EINTR) continue;
-                            else {
-                                if(errno==EPIPE || errno==EBADF)
-                                    log.log("safety: ffmpeg stdin closed during raw media forwarding");
-                                else
-                                    log.log("WARNING raw media write to ffmpeg stdin failed errno=",errno);
-                                close(pin[1]); pin[1]=-1; child_stdin_open=false;
-                            }
-                        }
+                        if(child_stdin_open) raw_pending.append(tmp,(size_t)n);
                     } else {
                         buf.append(tmp,(size_t)n); size_t e;
                         while((e=buf.find_first_of("\r\n"))!=std::string::npos){
@@ -2445,9 +2607,19 @@ static int run_child_posix(const fs::path& exe, const std::vector<std::string>& 
                     }
                 } else if(n==0) handle_parent_stdin_closed("stdin EOF");
             }
-            if(re&POLLHUP) handle_parent_stdin_closed("stdin HUP");
         }
         if(pr>0 && err_idx>=0 && (pfds[err_idx].revents&(POLLIN|POLLHUP))) drain_stderr();
+        if(!cc.enabled && child_stdin_open && !raw_pending.empty()) {
+            ssize_t written=write(pin[1],raw_pending.data(),raw_pending.size());
+            if(written>0) raw_pending.erase(0,(size_t)written);
+            else if(written<0 && errno!=EINTR && errno!=EAGAIN && errno!=EWOULDBLOCK) {
+                log.log("WARNING raw media write to ffmpeg stdin failed errno=",errno);
+                close(pin[1]);pin[1]=-1;child_stdin_open=false;raw_pending.clear();
+            }
+        }
+        if(!cc.enabled && !stdin_open && child_stdin_open && raw_pending.empty()) {
+            close(pin[1]);pin[1]=-1;child_stdin_open=false;
+        }
 
         if(g_mim_parent_signal!=0 && !parent_signal_logged) {
             parent_signal_logged=true;
@@ -2654,6 +2826,39 @@ static int run_child_windows(const fs::path& exe,const std::vector<std::string>&
     std::string buf;
     auto send_line=[&](const std::string& l){ std::string x=l+"\n"; DWORD n=0; WriteFile(wr,x.data(),(DWORD)x.size(),&n,nullptr); };
     bool stdin_pipe=true;
+    // Raw media must not share the 50ms legacy-control polling cadence: a
+    // 1024-byte read per poll caps DVD/media input below20KiB/s. Drain raw
+    // input on its own bounded-buffer worker while the main thread continues
+    // observing child exit. Stderr already has its independent drain above.
+    // Peek before ReadFile keeps an idle-input worker cancellable without
+    // closing the caller's stdin; the child job releases a blocked WriteFile.
+    std::atomic<bool> raw_stop{false};
+    std::thread raw_thread;
+    if(!cc.enabled && hin!=INVALID_HANDLE_VALUE && hin!=nullptr) {
+        HANDLE raw_wr=wr;
+        wr=nullptr; // sole ownership transfers to the raw worker
+        stdin_pipe=false;
+        raw_thread=std::thread([hin,raw_wr,&raw_stop,&log](){
+            char media[32768];
+            while(!raw_stop.load()) {
+                DWORD available=0;
+                if(!PeekNamedPipe(hin,nullptr,0,nullptr,&available,nullptr)) break;
+                if(!available) { Sleep(1); continue; }
+                DWORD count=0;
+                if(!ReadFile(hin,media,std::min<DWORD>((DWORD)sizeof(media),available),&count,nullptr) || !count) break;
+                DWORD offset=0;
+                while(offset<count && !raw_stop.load()) {
+                    DWORD written=0;
+                    if(!WriteFile(raw_wr,media+offset,count-offset,&written,nullptr) || !written) {
+                        log.log("safety: ffmpeg stdin closed during raw media forwarding code=",GetLastError());
+                        CloseHandle(raw_wr);return;
+                    }
+                    offset+=written;
+                }
+            }
+            CloseHandle(raw_wr); // real upstream EOF is forwarded after drain
+        });
+    }
     for(;;) {
         DWORD wait=WaitForSingleObject(pi.hProcess,50);
         if(wait==WAIT_OBJECT_0) break;
@@ -2704,6 +2909,11 @@ static int run_child_windows(const fs::path& exe,const std::vector<std::string>&
         }
     }
     DWORD rc=1; GetExitCodeProcess(pi.hProcess,&rc);
+    raw_stop.store(true);
+    // Child exit can leave descendants holding pipe handles. Release only
+    // this private job before joining workers; unrelated processes are intact.
+    if(child_job) { CloseHandle(child_job); child_job=nullptr; }
+    if(raw_thread.joinable()) raw_thread.join();
     if(metadata_thread.joinable()) metadata_thread.join();
     if(wr!=nullptr) CloseHandle(wr);
     CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
@@ -2760,6 +2970,19 @@ static void wait_for_active_video(const Ini& ini, const fs::path& input, Logger&
     log.log("WARNING active-file video-ready timeout ms=",timeout,"; launching FFmpeg fallback probe");
 }
 
+static bool ensure_windows_qsv_device(std::vector<std::string>& args,const Ini& ini,bool windows) {
+    const auto codec=get_output_opt_value(args,{"-vcodec","-c:v","-codec:v"});
+    if(!windows || !codec || *codec!="h264_qsv" || has_flag(args,"-hwaccel") ||
+       has_flag(args,"-init_hw_device") || has_flag(args,"-qsv_device") ||
+       has_flag(args,"-filter_hw_device")) return false;
+    const auto device=trim(ini.get("hardware","windows_qsv_device","0"));
+    if(device.empty() || device.size()>2 ||
+       !std::all_of(device.begin(),device.end(),[](unsigned char c){return std::isdigit(c)!=0;}))return false;
+    args.insert(args.begin(),{"-init_hw_device","qsv=vibe_win_qsv:hw,child_device_type=d3d11va,child_device="+device,
+        "-filter_hw_device","vibe_win_qsv"});
+    return true;
+}
+
 int main(int argc,char** argv){
     auto self=executable_path(); auto dir=self.parent_path(); auto platform=platform_info();
     if(argc>=2 && std::string(argv[1])=="--mim-version") {
@@ -2798,6 +3021,30 @@ int main(int argc,char** argv){
     if(!ini.get_bool("general","enabled",true)){ std::cerr<<"SageTV FFmpeg MIM is disabled in INI\n"; return 78; }
     if(!native_file_exists(real)){ std::cerr<<"SageTV FFmpeg MIM: real FFmpeg not found: "<<real<<"\n"; log.log("ERROR real FFmpeg missing ",real.string()); return 127; }
     std::vector<std::string> orig; for(int i=dry_run?2:1;i<argc;++i)orig.emplace_back(argv[i]);
+    // Only the negotiated, owned Direct API may request a session policy.
+    // Strip private values before FFmpeg; explicit policies never degrade to
+    // an unrequested software/copy job or mutate another session's INI.
+    if(auto selection=get_opt_value(orig,{"-sagetvencoderpolicy"})) {
+        const auto policy=*selection;
+        if(!has_flag(orig,"-sagetvdirect") ||
+           (policy!="server"&&policy!="prefer_hardware"&&policy!="software"&&policy!="hardware_only") ||
+           (get_output_opt_value(orig,{"-c:v","-vcodec"}).value_or("copy")=="copy")) {
+            std::cerr<<"invalid_session_encoder_policy\n";return 78;
+        }
+        ini.set("session","encoder_policy",policy);
+        remove_opt_value(orig,{"-sagetvencoderpolicy"});
+    }
+    if(auto selection=get_opt_value(orig,{"-sagetvhardwarebackend"})) {
+        const auto selected=*selection;
+        if(!has_flag(orig,"-sagetvdirect") ||
+           (selected!="auto"&&selected!="qsv"&&selected!="vaapi"&&selected!="nvenc"&&selected!="amf"&&selected!="videotoolbox"&&selected!="d3d12va") ||
+           get_output_opt_value(orig,{"-c:v","-vcodec"}).value_or("copy")=="copy" ||
+           (selected!="auto"&&ini.get("session","encoder_policy","server")=="software")) {
+            std::cerr<<"invalid_session_hardware_backend\n";return 78;
+        }
+        ini.set("session","hardware_backend",selected);
+        remove_opt_value(orig,{"-sagetvhardwarebackend"});
+    }
     // Administrators and container health checks commonly use GNU-style long
     // management flags, while FFmpeg itself accepts the historical single-dash
     // spelling. Normalize only the two unambiguous aliases before passthrough.
@@ -2807,7 +3054,16 @@ int main(int argc,char** argv){
     }
     if(ini.get_bool("logging","log_original_command",true))log.log("original: ",join_display(self,orig));
     bool stdinctrl=false,active=false; std::optional<fs::path> input; std::string backend;
-    auto final_args=rewrite_args(ini,platform,dir,real,ffprobe,orig,log,stdinctrl,active,input,backend);
+    std::vector<std::string> final_args;
+    try { final_args=rewrite_args(ini,platform,dir,real,ffprobe,orig,log,stdinctrl,active,input,backend); }
+    catch(const std::runtime_error&) { std::cerr<<"requested_encoder_unavailable\n";return 78; }
+    // MIM-WIN-001: automatic QSV session selection on a multi-Intel Windows
+    // host chose the failing adapter (FrameType0/empty output). Explicit
+    // D3D11 adapter0 passes the same real MPEG-2 source. Apply to software
+    // frames only, including native Web argv; never overwrite caller devices,
+    // hardware-frame ownership, another codec/platform or saved INI values.
+    if(ensure_windows_qsv_device(final_args,ini,platform.name=="windows-x64"))
+        log.log("compat: explicit Windows D3D11 QSV software-frame device");
     if(dry_run) {
         if(ini.get_bool("logging","log_final_command",true))
             log.log("final backend=",backend," cmd=",join_display(real,final_args));
@@ -2824,7 +3080,8 @@ int main(int argc,char** argv){
     const fs::path status_dir=mim_status_directory(dir,ini);
     const fs::path active_status=status_dir/("job-"+std::to_string(mim_pid)+".json");
     CaptionSideChannelSlot caption_slot;
-    if(stdinctrl && is_encode_backend(backend)) {
+    if(stdinctrl && is_encode_backend(backend) &&
+       (!has_flag(orig,"-sagetvruntimebitrate") || has_flag(orig,"-stdinctrl"))) {
         caption_slot=claim_caption_side_channel(ini,status_dir,mim_pid,log);
         append_caption_side_channel_output(final_args,ini,caption_slot);
     }
@@ -2841,6 +3098,11 @@ int main(int argc,char** argv){
     if(active && input) wait_for_active_video(ini,*input,log);
 
     ControlConfig cc; cc.enabled=stdinctrl&&ini.get_bool("stdinctrl","enabled",true); cc.case_insensitive=ini.get_bool("stdinctrl","case_insensitive",true); cc.rate_enabled=has_flag(final_args,"-sagetvratectrl"); cc.rate_mode=lower(ini.get("stdinctrl","videorateadapt_mode","forward")); cc.inactive_action=lower(ini.get("active_file","inactivefile_action","terminate_child")); cc.active=active; cc.isolate_child_process=ini.get_bool("safety","isolate_child_process",true); cc.terminate_grace_ms=ini.get_ll("safety","terminate_grace_ms",2000);
+    if(has_flag(orig,"-sagetvruntimebitrate")) {
+        const bool qualified=platform.name=="linux-x64" && encoder=="h264_qsv" && cc.enabled && cc.rate_enabled
+            && cc.rate_mode=="forward" && ini.get_bool("stdinctrl","runtime_bitrate_control",false);
+        std::cerr<<(qualified?"VIBE_RATE_CONTROL revision=1 encoder=h264_qsv":"VIBE_RATE_CONTROL unavailable")<<"\n";
+    }
     for(auto s:split_csv(ini.get("stdinctrl","stop_commands","STOP,QUIT,Q")))cc.stop.insert(cc.case_insensitive?lower(s):s);
 #ifdef _WIN32
     bool hardware_runtime_failure=false;

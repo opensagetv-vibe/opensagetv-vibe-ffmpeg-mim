@@ -1,5 +1,13 @@
 # OpenSageTV Vibe FFmpeg/MIM contributor rules
 
+## Superseding stock-server rule (2026-11-09)
+
+`.232` now runs official stock Core. Older non-stock232/Core exceptions below
+are superseded: never replace Sage.jar, bundled native Core or stock FFmpeg.
+Deliver this separate optional runtime through the FFmpeg SageTV plugin;
+normal stock/client playback must retain its no-plugin fallback. Preserve
+restart/activity guards and authoritative INI settings.
+
 ## Task fix and server-boundary policy
 
 Apply this policy to every task workflow, including dependency fixes across

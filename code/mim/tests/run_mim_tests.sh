@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+MIM_VERSION="$(sed -n 's/^VERSION=//p' "$ROOT/release.properties" | tr -d '\r')"
+[[ "$MIM_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
 OUT="$ROOT/output/linux-x64"
 
 mkdir -p "$OUT"
@@ -10,6 +12,11 @@ MIM="$TMP/ffmpeg"
 CXX_BIN="${CXX:-g++}"
 "$CXX_BIN" -std=c++17 -O2 -pipe -pthread -static -s \
   "$ROOT/code/mim/sagetv_ffmpeg_mim.cpp" -o "$MIM"
+MIM_PROBE_TEST_BINARY="$MIM" python3 "$ROOT/code/mim/tests/run_mpegts_probe_tests.py"
+MIM_PROBE_TEST_BINARY="$MIM" python3 "$ROOT/code/mim/tests/run_vaapi_caption_repack_tests.py"
+MIM_PROBE_TEST_BINARY="$MIM" python3 "$ROOT/code/mim/tests/run_hardware_backend_tests.py"
+"$CXX_BIN" -std=c++17 -pthread "$ROOT/code/mim/tests/windows_qsv_device_test.cpp" -o "$TMP/windows-qsv-device-test"
+"$TMP/windows-qsv-device-test"
 cat > "$TMP/ffmpeg.real" <<'SH'
 #!/usr/bin/env bash
 if [[ " $* " == *" -encoders "* ]]; then
@@ -79,9 +86,9 @@ printf '\x47' > "$TMP/media/test.ts"
 printf '\x1a\x45\xdf\xa3' > "$TMP/media/test.mkv"
 
 v="$($TMP/ffmpeg --mim-version)"
-[[ "$v" == *"SageTV FFmpeg MIM 0.4.11"* ]]
+[[ "$v" == *"SageTV FFmpeg MIM $MIM_VERSION"* ]]
 c="$($TMP/ffmpeg --mim-capabilities)"
-[[ "$c" == *'"mimVersion":"0.4.11"'* ]]
+[[ "$c" == *"\"mimVersion\":\"$MIM_VERSION\""* ]]
 [[ "$c" == *'"dvdStreamTransform":true'* ]]
 python3 - "$c" <<'PY'
 import json
@@ -90,6 +97,7 @@ import sys
 caps = json.loads(sys.argv[1])
 assert caps["platform"] == "linux-x64"
 assert caps["ownedDirectStreams"] is True
+assert caps["responsiveHlsRevision"] == 1
 assert caps["selectedBackend"] in {"qsv", "nvenc", "vaapi", "software", "unavailable"}
 assert "ffmpegVersion" in caps
 assert list(caps["backends"]) == ["vaapi", "qsv", "nvenc", "amf", "d3d12va", "software"]
@@ -110,7 +118,7 @@ PY
 cp "$TMP/ffmpeg.real.ini" "$TMP/disabled.ini"
 sed -i 's/^enabled=true$/enabled=false/' "$TMP/disabled.ini"
 c="$(SAGETV_FFMPEG_MIM_INI="$TMP/disabled.ini" "$TMP/ffmpeg" --mim-capabilities)"
-[[ "$c" == *'"mimVersion":"0.4.11"'* ]]
+[[ "$c" == *"\"mimVersion\":\"$MIM_VERSION\""* ]]
 mkdir -p "$TMP/missing-real"
 cp "$TMP/ffmpeg" "$TMP/missing-real/ffmpeg"
 cp "$TMP/ffmpeg.real.ini" "$TMP/missing-real/ffmpeg.real.ini"
@@ -170,7 +178,7 @@ d="$($TMP/ffmpeg --mim-dry-run -priority idle -dumpmetadata -v 2 -i "$TMP/media/
 [[ "$d" == *"-loglevel info"* ]]
 [[ "$d" == *"-i $TMP/media/test.ts"* ]]
 [[ -f "$TMP/ffmpeg.real.log" ]]
-grep -q 'mim-start version=0.4.11' "$TMP/ffmpeg.real.log"
+grep -Fq "mim-start version=$MIM_VERSION" "$TMP/ffmpeg.real.log"
 
 # Modern FFmpeg emits colon-delimited stream indexes. Stock SageTV's
 # FormatParser accepts the historical dot-delimited form, so only metadata
@@ -232,8 +240,15 @@ d="$($TMP/ffmpeg --mim-dry-run -v 3 -y -threads 2 -sn -vsync 0 -async 1 -stdinct
 [[ "$d" == *"backend=qsv"* ]]
 [[ "$d" == *"-c:v h264_qsv"* ]]
 [[ "$d" != *"-sn"* ]]
-[[ "$d" == *"-map 0:s?"* ]]
+# No original map: retain FFmpeg automatic A/V selection. A subtitle-only map
+# would suppress A/V as soon as a real DVB/Teletext subtitle is discovered.
+[[ "$d" != *"-map 0:s?"* ]]
 [[ "$d" == *"-c:s copy"* ]]
+
+# Existing explicit A/V mappings are retained and may safely include every
+# optional subtitle stream. No invented video/audio selectors are allowed.
+d="$($TMP/ffmpeg --mim-dry-run -stdinctrl -sn -i "$TMP/media/test.ts" -map 0:0 -map 0:1 -f mpegts -vcodec mpeg4 -acodec aac -)"
+[[ "$d" == *"-map 0:0"* && "$d" == *"-map 0:1"* && "$d" == *"-map 0:s?"* ]]
 grep -q 'compat: preserved MPEG-TS DVB/Teletext subtitle streams' "$TMP/ffmpeg.real.log"
 
 # Subtitle preservation is narrowly scoped to MPEG-TS output. A legacy
@@ -350,7 +365,7 @@ d="$($TMP/ffmpeg --mim-dry-run -stdinctrl -activefile -vsync 0 -async 1 -i "$TMP
 [[ "$d" != *"-stdinctrl"* ]]
 [[ "$d" == *"-c:v h264_qsv"* ]]
 [[ "$d" != *"-vsync"* ]]
-[[ "$d" != *"-async"* ]]
+[[ "$d" != *"-async "* ]]
 [[ "$d" != *"-rc_init_cplx"* ]]
 [[ "$d" != *"-minrate"* ]]
 [[ "$d" != *"-mbd"* ]]
@@ -427,6 +442,29 @@ d="$($TMP/ffmpeg --mim-dry-run -stdinctrl -i "$TMP/media/test.ts" -c:v libx264 -
 [[ "$d" == *"-c:v h264_qsv"* ]]
 
 # Native HEVC software request maps to HEVC hardware, not H.264.
+# Responsive HLS applies QSV IDR only to the negotiated Direct segment/M3U8
+# transcode. The private flag never reaches FFmpeg or leaks into other modes.
+for scope in responsive legacy copy ts; do
+  extra=(); codec=libx264; format=segment
+  [[ "$scope" != legacy ]] && extra+=(-sagetvresponsivehls)
+  [[ "$scope" == copy ]] && codec=copy
+  [[ "$scope" == ts ]] && format=mpegts
+  d="$($TMP/ffmpeg --mim-dry-run -sagetvdirect "${extra[@]}" -re -readrate_initial_burst 6 -i "$TMP/media/test.ts" -c:v "$codec" -b:v 2M -force_key_frames 'expr:gte(t,n_forced*1)' -f "$format" -segment_list_type m3u8 -segment_time 1 -segment_list "$TMP/stream.m3u8" "$TMP/seg_%06d.ts")"
+  [[ "$d" != *'-sagetvresponsivehls'* ]]
+  if [[ "$scope" == responsive ]]; then
+    [[ "$d" == *'-forced_idr 1'* && "$d" == *'-c:v h264_qsv'* ]]
+    [[ "$d" == *'-readrate_initial_burst 6'* && "$d" == *'-segment_time 1'* ]]
+  else [[ "$d" != *'-forced_idr'* ]]; fi
+done
+
+# Native HEVC software request maps to HEVC hardware, not H.264.
+for backend in software vaapi nvenc; do
+  sed "s/^backend=qsv$/backend=$backend/" "$TMP/ffmpeg.real.ini" > "$TMP/hls-$backend.ini"
+  d="$(SAGETV_FFMPEG_MIM_INI="$TMP/hls-$backend.ini" "$TMP/ffmpeg" --mim-dry-run -sagetvdirect -sagetvresponsivehls -i "$TMP/media/test.ts" -c:v libx264 -b:v 2M -f segment -segment_list_type m3u8 -segment_time 1 -segment_list "$TMP/stream.m3u8" "$TMP/seg_%06d.ts")"
+  [[ "$d" != *'-forced_idr'* && "$d" != *'-sagetvresponsivehls'* ]]
+done
+
+# Native HEVC software request maps to HEVC hardware, not H.264.
 d="$($TMP/ffmpeg --mim-dry-run -stdinctrl -i "$TMP/media/test.ts" -c:v libx265 -b:v 2M -f mpegts -)"
 [[ "$d" == *"backend=qsv"* ]]
 [[ "$d" == *"-c:v hevc_qsv"* ]]
@@ -469,7 +507,7 @@ d="$($TMP/ffmpeg --mim-dry-run -v 3 -y -threads 2 -sn -vsync 1 -async 100 \
 [[ "$d" == *"-f mpegts"* ]]
 [[ "$d" != *"-f dvd"* ]]
 [[ "$d" != *"-fps_mode"* ]]
-[[ "$d" != *"-async"* ]]
+[[ "$d" != *"-async "* ]]
 [[ "$d" != *"-s 352x240"* ]]
 [[ "$d" != *"-r 29.97"* ]]
 
@@ -811,3 +849,7 @@ set -e
 grep -q 'containing EPIPE' "$TMP/ffmpeg.real.log"
 
 echo "[PASS] MIM mapping + MiniPlayer switch teardown + crash-containment tests"
+python3 "$ROOT/code/mim/tests/run_qsv_caption_queue_tests.py" --wrapper "$MIM" \
+  --report "$ROOT/output/test-results/qsv-caption-queue.json"
+python3 "$ROOT/code/mim/tests/run_stdin_eof_tests.py"
+python3 "$ROOT/code/mim/tests/run_raw_duplex_tests.py"
